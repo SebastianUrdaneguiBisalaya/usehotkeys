@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@usehotkeys/core": [
+        "../core/src/index.ts"
+      ]
+    }
+  },
+  "extends": "../core/tsconfig.json",
+  "include": [
+    "src",
+    "tests"
+  ]
+}
