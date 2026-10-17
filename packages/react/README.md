@@ -1,6 +1,6 @@
 # @usehotkeys/react
 
-React hooks for [`@usehotkeys/core`](../core/README.md): declare keyboard shortcuts next to the component that owns them. They are added on mount and removed on unmount.
+React hooks for [`@usehotkeys/core`](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md): declare keyboard shortcuts next to the component that owns them. They are added on mount and removed on unmount.
 
 Works with React 18 and 19, StrictMode and server rendering.
 
@@ -12,12 +12,16 @@ pnpm add -E @usehotkeys/react @usehotkeys/core
 
 1. [Quick start](#quick-start)
 2. [`useHotkeys`](#usehotkeys)
-3. [`useHotkeyScope`](#usehotkeyscope)
-4. [`useRecordHotkey`](#userecordhotkey)
-5. [`HotkeysProvider`](#hotkeysprovider)
-6. [Recipes](#recipes)
-7. [How it works](#how-it-works)
-8. [FAQ](#faq)
+3. [`useHotkeyAction`](#usehotkeyaction)
+4. [`useHotkeyScope`](#usehotkeyscope)
+5. [`useBindings`](#usebindings) and [`useShortcuts`](#useshortcuts)
+6. [`useRecordHotkey`](#userecordhotkey)
+7. [`HotkeysProvider`](#hotkeysprovider)
+8. [Recipes](#recipes)
+9. [Next.js and server rendering](#nextjs-and-server-rendering)
+10. [Compatibility](#compatibility)
+11. [How it works](#how-it-works)
+12. [FAQ](#faq)
 
 ## Quick start
 
@@ -35,7 +39,7 @@ export function App() {
 }
 ```
 
-No provider, no setup. `mod` is `⌘` on macOS and `Ctrl` elsewhere. For how combos are written (`"mod+shift+k"`, `"?"`, `"ctrl++"`, arrays), see [Writing combos](../core/README.md#writing-combos) in the core README.
+No provider, no setup. `mod` is `⌘` on macOS and `Ctrl` elsewhere. For how combos are written (`"mod+shift+k"`, `"?"`, `"ctrl++"`, arrays), see [Writing combos](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#writing-combos) in the core README.
 
 ## `useHotkeys`
 
@@ -47,7 +51,7 @@ useHotkeys(combo, handler, options?)
 | --- | --- | --- |
 | `combo` | `string \| string[]` | `"mod+k"` or `["j", "arrowdown"]`. An invalid combo throws `HotkeyParseError` during the effect. |
 | `handler` | `(event, { combo, binding }) => void` | Called when the keys are pressed. |
-| `options` | `UseHotkeysOptions` | Same options as [core `bind`](../core/README.md#options): `scope`, `priority`, `enabled`, `once`, `ignoreInputs`, `layout`, `label`... |
+| `options` | `UseHotkeysOptions` | Same options as [core `bind`](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#options): `scope`, `priority`, `enabled`, `once`, `ignoreInputs`, `layout`, `label`... |
 
 Things worth knowing:
 
@@ -63,8 +67,29 @@ Things worth knowing:
   }
   ```
 
-- **Conflicts between components are resolved for you.** If two mounted components bind `escape`, the highest `priority` wins, then the most recently mounted. See [Priorities and conflicts](../core/README.md#priorities-and-conflicts).
-- **Typing in inputs is handled.** Plain keys do not fire while the user types; `mod+s` does. Change it with `ignoreInputs`. See [Typing in inputs](../core/README.md#typing-in-inputs).
+- **Conflicts between components are resolved for you.** If two mounted components bind `escape`, the highest `priority` wins, then the most recently mounted. See [Priorities and conflicts](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#priorities-and-conflicts).
+- **Typing in inputs is handled.** Plain keys do not fire while the user types; `mod+s` does. Change it with `ignoreInputs`. See [Typing in inputs](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#typing-in-inputs).
+
+## `useHotkeyAction`
+
+```ts
+useHotkeyAction(action, handler, options?)
+```
+
+Like `useHotkeys`, but the keys come from the **keymap** (see [Keymap](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#keymap)) instead of being written in the component. If the user changes the shortcut later, the binding follows it without re-registering.
+
+```tsx
+<HotkeysProvider options={{ keymap: { openPalette: { keys: "mod+k", label: "Open palette" } } }}>
+  <App />
+</HotkeysProvider>
+
+function App() {
+  useHotkeyAction("openPalette", () => setOpen(true));
+  // ...
+}
+```
+
+An action that is not in the keymap throws `UnknownActionError`. The options are the same as `useHotkeys`.
 
 ## `useHotkeyScope`
 
@@ -89,13 +114,84 @@ function Modal({ onClose }: { onClose: () => void }) {
 | `inherit` | `true` | `false` makes only this scope (and `scope: "*"` bindings) active. Use it for modals. |
 | `enabled` | `true` | Activate the scope only while `true`. |
 
+## `useBindings`
+
+```ts
+const bindings = useBindings({ activeOnly?, labeledOnly?, group?, scope? });
+```
+
+Returns every shortcut registered in the app and **stays up to date**: it re-renders when a component mounts or unmounts a hotkey, a scope opens or closes, or `enabled` flips. Use it for a "keyboard shortcuts" help dialog.
+
+| Filter | Meaning |
+| --- | --- |
+| `activeOnly` | Only shortcuts that can fire right now: enabled and in an active scope. |
+| `labeledOnly` | Only shortcuts with a `label` (skips the ones you did not name). |
+| `group` | Only this `group`. |
+| `scope` | Only this `scope`. |
+
+```tsx
+import { formatHotkey } from "@usehotkeys/core";
+import { useBindings } from "@usehotkeys/react";
+
+function ShortcutsHelp() {
+  const bindings = useBindings({ activeOnly: true, labeledOnly: true });
+  return (
+    <ul>
+      {bindings.map((b) => (
+        <li key={b.id}>
+          {b.label}: <kbd>{formatHotkey(b.combos[0]!)}</kbd>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Each item has `label`, `description`, `group`, `combos`, `scope`, `priority`, `active` and `action`. It lists what is *registered*; if you want the keys the user customised, use `useShortcuts`.
+
+## `useShortcuts`
+
+```ts
+const shortcuts = useShortcuts({ group? });
+```
+
+Every action of the keymap with its current keys, kept up to date: `action`, `keys`, `defaultKeys`, `customized`, `label`, `description`, `group`. Combine it with `useRecordHotkey` for a settings screen:
+
+```tsx
+function ShortcutSettings() {
+  const hotkeys = useHotkeysInstance();
+  const shortcuts = useShortcuts();
+  const { start, isRecording } = useRecordHotkey();
+
+  async function change(action: string) {
+    const combo = await start();
+    if (combo) {
+      hotkeys.setShortcut(action, combo);
+      localStorage.setItem("shortcuts", JSON.stringify(hotkeys.getOverrides()));
+    }
+  }
+
+  return (
+    <ul>
+      {shortcuts.map((s) => (
+        <li key={s.action}>
+          {s.label ?? s.action}: <kbd>{s.keys.map((k) => formatHotkey(k)).join(", ") || "none"}</kbd>
+          <button type="button" onClick={() => change(s.action)} disabled={isRecording}>Change</button>
+          {s.customized && <button type="button" onClick={() => hotkeys.setShortcut(s.action, null)}>Reset</button>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
 ## `useRecordHotkey`
 
 ```ts
 const { start, cancel, isRecording, preview, combo } = useRecordHotkey(options?);
 ```
 
-Records the next combo the user presses (see [Recording shortcuts](#recording-shortcuts)) and keeps the UI state for you. Options are the same as `hotkeys.record`, except `onChange` and `signal`, which the hook manages.
+Records the next combo the user presses (see [Recording shortcuts](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#recording-shortcuts)) and keeps the UI state for you. Options are the same as `hotkeys.record`, except `onChange` and `signal`, which the hook manages.
 
 | Returned | Meaning |
 | --- | --- |
@@ -138,26 +234,23 @@ import { HotkeysProvider } from "@usehotkeys/react";
 
 | Prop | Meaning |
 | --- | --- |
-| `options` | [`createHotkeys` options](../core/README.md#options) for the engine the provider creates: `platform`, `capture`, `defaults`, `onConflict`, `debug`. |
+| `options` | [`createHotkeys` options](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#options) for the engine the provider creates: `platform`, `capture`, `defaults`, `onConflict`, `debug`. |
 | `hotkeys` | Pass an engine you created yourself (e.g. to also use it outside React). |
 
-`useHotkeysInstance()` returns the engine in use, so you can call `getBindings()` for a help dialog or `formatHotkey`:
+`useHotkeysInstance()` returns the engine in use, for calling methods directly such as `setShortcut`, `getOverrides` or `trigger`. For lists, use [`useBindings`](#usebindings) and [`useShortcuts`](#useshortcuts), which stay up to date.
 
-```tsx
-import { formatHotkey } from "@usehotkeys/core";
-import { useHotkeysInstance } from "@usehotkeys/react";
+Engine methods that have no hook of their own are available on that instance:
 
-function ShortcutsHelp() {
-  const hotkeys = useHotkeysInstance();
-  return (
-    <ul>
-      {hotkeys.getBindings().filter((b) => b.active && b.label).map((b) => (
-        <li key={b.id}>{b.label}: <kbd>{formatHotkey(b.combos[0]!)}</kbd></li>
-      ))}
-    </ul>
-  );
-}
-```
+| Method | Use it for |
+| --- | --- |
+| `getBindings()` | A one-time read of the registered shortcuts. It does not re-render; use `useBindings` in components. |
+| `getConflicts()` | Checking for competing shortcuts, e.g. in a test or a dev-only effect. |
+| `getActiveScopes()` | Seeing which scopes are active right now. |
+| `isPressed(key)` | Whether a key is held. Read it inside event handlers, not while rendering: it is not reactive. |
+| `trigger(combo)` | Running a shortcut from a button so both do the same thing. |
+| `notify()` | Telling `useBindings` to refresh when something an `enabled` function reads has changed. |
+
+Each is explained in the [core README](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#reading-state).
 
 Providers nest: a hook uses the nearest one. In tests, wrap components in a provider with `options={{ platform: "other" }}` to make `mod` deterministic.
 
@@ -193,18 +286,65 @@ useHotkeys("escape", closeChild, { priority: 10, passthrough: true });
 useHotkeys("enter", dismissBanner, { once: true });
 ```
 
-**Next.js / SSR**: hooks only register inside effects, so nothing runs on the server. Use them in Client Components (`"use client"`).
+**Next.js / SSR**: see [Next.js and server rendering](#nextjs-and-server-rendering).
+
+## Next.js and server rendering
+
+- **The hooks are safe on the server.** `useHotkeys`, `useHotkeyAction` and `useHotkeyScope` only touch the engine inside effects, which never run on the server. `useBindings` and `useShortcuts` render an empty list on the server and while hydrating, then fill in, so there is no hydration mismatch.
+- **App Router.** The package ships with a `"use client"` directive, so you can import `HotkeysProvider` straight into a Server Component such as `app/layout.tsx`. Your own components that *call* a hook need `"use client"` at the top of their file, like with any React hook.
+
+  ```tsx
+  // app/layout.tsx (a Server Component)
+  import { HotkeysProvider } from "@usehotkeys/react";
+
+  export default function RootLayout({ children }: { children: React.ReactNode }) {
+    return (
+      <html lang="en">
+        <body>
+          <HotkeysProvider>{children}</HotkeysProvider>
+        </body>
+      </html>
+    );
+  }
+  ```
+
+  ```tsx
+  // app/command-palette.tsx
+  "use client";
+
+  import { useHotkeys } from "@usehotkeys/react";
+  import { useState } from "react";
+
+  export function CommandPalette() {
+    const [open, setOpen] = useState(false);
+    useHotkeys("mod+k", () => setOpen(true));
+    return open ? <dialog open>…</dialog> : null;
+  }
+  ```
+
+- **Functions cannot cross the server/client boundary.** If you need `options.onConflict` or `options.defaults.ignoreInputs` as a function, build the provider in your own `"use client"` component instead of passing those props from a Server Component.
+- **No leaks between requests.** Without a provider the hooks share one engine that attaches nothing until a binding exists, and bindings only exist in browsers, so a server rendering many requests never accumulates shortcuts.
+- Pages Router, Remix, Vite SSR and Astro islands follow the same rule: hooks go in components that render on the client.
+
+## Compatibility
+
+- **React** 18 and 19 (CI runs the tests against both), with StrictMode and concurrent rendering.
+- **Peer dependencies:** `react` and `@usehotkeys/core`.
+- **Formats:** ESM and CommonJS with types; `"use client"` included for Next.js.
+- **Size:** about 1.3 KB minified + gzipped, on top of the core (about 6 KB). Browser support is the same as the core's: see [Compatibility and size](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#compatibility-and-size).
 
 ## How it works
 
 - `useHotkeys` stores the latest `handler` and options in a ref and runs one `useEffect` that calls `hotkeys.bind(...)` and returns the unbind function. The effect depends on the combo and the static options only, so it is StrictMode-safe (mount, unmount, mount again leaves exactly one binding).
+- `useHotkeyAction` shares its implementation with `useHotkeys` and calls `hotkeys.bindAction`, so changing a shortcut never re-registers.
+- `useBindings` and `useShortcuts` use `useSyncExternalStore` with the engine's `subscribe` and its cached snapshots; they re-render only when something changed.
 - `useHotkeyScope` runs `hotkeys.pushScope(...)` in an effect and returns its disposer.
 - The engine is created lazily on first use (or by `HotkeysProvider`), and attaches DOM listeners only while at least one binding exists.
 - Source is three small files in `src/`: `context.tsx`, `use-hotkeys.ts`, `use-hotkey-scope.ts`.
 
 ## FAQ
 
-**My shortcut does nothing.** See "Why did my shortcut not fire?" in the [core FAQ](../core/README.md#faq-and-known-limits). Setting `<HotkeysProvider options={{ debug: true }}>` logs conflicts.
+**My shortcut does nothing.** See "Why did my shortcut not fire?" in the [core FAQ](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#faq-and-known-limits). Setting `<HotkeysProvider options={{ debug: true }}>` logs conflicts.
 
 **Do I need `@usehotkeys/core` installed?** Yes. It is a peer dependency so your app and these hooks share one copy.
 

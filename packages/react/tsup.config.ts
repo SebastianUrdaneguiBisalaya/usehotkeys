@@ -1,6 +1,11 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
+  // Lets Next.js (App Router) import the provider and hooks from a Server Component file.
+  banner: {
+    js: '"use client";',
+  },
+
   bundle: true,
 
   clean: true,
@@ -43,5 +48,5 @@ export default defineConfig({
 
   target: "es2022",
 
-  treeshake: true,
+  treeshake: false,
 });

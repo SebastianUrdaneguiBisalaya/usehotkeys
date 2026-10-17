@@ -1,12 +1,16 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { createHotkeys } from "@usehotkeys/core";
-import { StrictMode, useRef, useState } from "react";
+import { type ReactNode, StrictMode, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   HotkeysProvider,
+  useBindings,
+  useHotkeyAction,
   useHotkeyScope,
   useHotkeys,
+  useHotkeysInstance,
   useRecordHotkey,
+  useShortcuts,
 } from "../src/index.js";
 
 afterEach(cleanup);
@@ -252,5 +256,165 @@ describe("useRecordHotkey", () => {
     press("k");
     expect(handler).toHaveBeenCalledTimes(1);
     probe.destroy();
+  });
+});
+
+describe("useBindings", () => {
+  const isolated = (children: ReactNode, options = {}) => (
+    <HotkeysProvider
+      options={{
+        platform: "other",
+        ...options,
+      }}
+    >
+      {children}
+    </HotkeysProvider>
+  );
+
+  it("lists registered shortcuts and updates as components mount and unmount", () => {
+    const List = () => {
+      const bindings = useBindings({
+        labeledOnly: true,
+      });
+      return (
+        <ul data-testid="list">
+          {bindings.map((binding) => (
+            <li key={binding.id}>{binding.label}</li>
+          ))}
+        </ul>
+      );
+    };
+    const Feature = () => {
+      useHotkeys("mod+k", () => {}, {
+        label: "Open palette",
+      });
+      useHotkeys("x", () => {});
+      return null;
+    };
+    const App = ({ show }: { show: boolean }) =>
+      isolated(
+        <>
+          <List />
+          {show ? <Feature /> : null}
+        </>,
+      );
+    const { getByTestId, rerender } = render(<App show={false} />);
+    expect(getByTestId("list").textContent).toBe("");
+    rerender(<App show />);
+    expect(getByTestId("list").textContent).toBe("Open palette");
+    rerender(<App show={false} />);
+    expect(getByTestId("list").textContent).toBe("");
+  });
+
+  it("filters by activeOnly and group, and reacts to scopes and enabled", () => {
+    const List = () => {
+      const active = useBindings({
+        activeOnly: true,
+        group: "Editor",
+      });
+      return (
+        <p data-testid="active">
+          {active.map((binding) => binding.label).join(",")}
+        </p>
+      );
+    };
+    const Feature = ({ enabled }: { enabled: boolean }) => {
+      useHotkeys("b", () => {}, {
+        enabled,
+        group: "Editor",
+        label: "Bold",
+        scope: "editor",
+      });
+      useHotkeys("i", () => {}, {
+        group: "Other",
+        label: "Italic",
+      });
+      return null;
+    };
+    const Scope = ({ on }: { on: boolean }) => {
+      useHotkeyScope("editor", {
+        enabled: on,
+      });
+      return null;
+    };
+    const App = ({ enabled, scope }: { enabled: boolean; scope: boolean }) =>
+      isolated(
+        <>
+          <List />
+          <Feature enabled={enabled} />
+          <Scope on={scope} />
+        </>,
+      );
+    const { getByTestId, rerender } = render(
+      <App
+        enabled
+        scope={false}
+      />,
+    );
+    expect(getByTestId("active").textContent).toBe("");
+    rerender(
+      <App
+        enabled
+        scope
+      />,
+    );
+    expect(getByTestId("active").textContent).toBe("Bold");
+    rerender(
+      <App
+        enabled={false}
+        scope
+      />,
+    );
+    expect(getByTestId("active").textContent).toBe("");
+  });
+});
+
+describe("keymap hooks", () => {
+  const keymap = {
+    open: {
+      group: "Nav",
+      keys: "mod+k",
+      label: "Open",
+    },
+  };
+
+  it("useHotkeyAction follows setShortcut and useShortcuts reflects it", () => {
+    const handler = vi.fn();
+    let instance: ReturnType<typeof useHotkeysInstance> | undefined;
+    const Probe = () => {
+      instance = useHotkeysInstance();
+      useHotkeyAction("open", handler);
+      const shortcuts = useShortcuts();
+      return (
+        <p data-testid="keys">
+          {shortcuts.map((shortcut) => shortcut.keys.join("|")).join(",")}
+        </p>
+      );
+    };
+    const { getByTestId } = render(
+      <HotkeysProvider
+        options={{
+          keymap,
+          platform: "other",
+        }}
+      >
+        <Probe />
+      </HotkeysProvider>,
+    );
+    expect(getByTestId("keys").textContent).toBe("mod+k");
+    press("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    act(() => instance?.setShortcut("open", "mod+p"));
+    expect(getByTestId("keys").textContent).toBe("mod+p");
+    press("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    press("p", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 });
