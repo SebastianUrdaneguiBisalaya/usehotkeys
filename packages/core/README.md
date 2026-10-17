@@ -12,16 +12,18 @@ pnpm add -E @usehotkeys/core
 
 1. [Quick start](#quick-start)
 2. [Writing combos](#writing-combos)
-3. [Options](#options)
-4. [Scopes](#scopes)
-5. [Priorities and conflicts](#priorities-and-conflicts)
-6. [Typing in inputs](#typing-in-inputs)
-7. [Keyboard layouts](#keyboard-layouts)
-8. [Reading state](#reading-state): `getBindings`, `isPressed`, `trigger`, `formatHotkey`
-9. [Errors](#errors)
-10. [Recipes](#recipes)
-11. [How it works](#how-it-works) (for maintainers and the curious)
-12. [FAQ and known limits](#faq-and-known-limits)
+3. [Sequences](#sequences)
+4. [Options](#options)
+5. [Scopes](#scopes)
+6. [Priorities and conflicts](#priorities-and-conflicts)
+7. [Typing in inputs](#typing-in-inputs)
+8. [Keyboard layouts](#keyboard-layouts)
+9. [Reading state](#reading-state): `getBindings`, `isPressed`, `trigger`, `formatHotkey`
+10. [Recording shortcuts](#recording-shortcuts)
+11. [Errors](#errors)
+12. [Recipes](#recipes)
+13. [How it works](#how-it-works) (for maintainers and the curious)
+14. [FAQ and known limits](#faq-and-known-limits)
 
 ## Quick start
 
@@ -63,12 +65,35 @@ A combo is modifiers and one key joined with `+`. Case and order do not matter.
 | `"numpad1"` | The numeric keypad `1` |
 | `"shift"` | Pressing Shift on its own (modifier-only) |
 | `["ctrl+s", "meta+s"]` | An array: several combos, one handler |
+| `"g i"`, `"mod+k mod+s"` | A [sequence](#sequences): press `g`, then `i` |
 
 Modifier names: `ctrl`/`control`, `alt`/`option`/`opt`, `shift`, `meta`/`cmd`/`command`/`win`/`super`, and `mod`.
 
 **Modifiers are exact by default.** `"ctrl+k"` does not fire for `Ctrl+Shift+K`. Set `exact: false` to allow extra modifiers. For symbols such as `?`, Shift is implied by the character, so `"?"` works without writing `shift+/`.
 
-Spaces are not allowed (`"g g"` is a key *sequence*, which is not supported yet). The space bar is `"space"`.
+Spaces separate the steps of a [sequence](#sequences). The space bar is `"space"`.
+
+## Sequences
+
+A **sequence** is several steps separated by spaces. The user presses them one after another, like `g` then `i` in Gmail or `Ctrl+K` then `Ctrl+S` in VS Code.
+
+```ts
+hotkeys.bind("g i", () => goToInbox());
+hotkeys.bind("g g", () => scrollToTop());
+hotkeys.bind("mod+k mod+s", () => openKeyboardShortcuts());
+```
+
+How they behave:
+
+- **Timing:** the next step must come within `sequenceTimeout` (default `1000` ms, set it in `createHotkeys`). After that the sequence starts over.
+- **Any other key breaks it.** `g`, `x`, `i` does not fire `"g i"`. Modifier presses between steps (holding `Ctrl` from step to step) are fine, and a held-down key (auto-repeat) counts once.
+- **After it fires, it starts over**, so `"g g"` needs two new presses each time.
+- **Every step is a full combo**, with its own modifiers. A step cannot be modifiers only (`"g shift"` is an error).
+- **Priority works as usual.** If `"g"` and `"g g"` are both bound, the single `g` fires immediately on the first press (there is no waiting to see what comes next) and the longer sequence wins on the second. Avoid binding a key and a sequence that starts with it, or give them different `priority`.
+- **Typing in inputs:** `ignoreInputs: "auto"` looks at the last step, so `"g i"` does not fire while typing, but `"mod+k mod+s"` does.
+- **Only on `keydown`.** `{ on: "keyup" }` with a sequence throws `HotkeyParseError`.
+- **`preventDefault` applies to the final step.** Earlier keys keep their normal behaviour.
+- `hotkeys.trigger("g i")` runs it, and `formatHotkey("g i")` gives `"G I"`.
 
 ## Options
 
@@ -78,7 +103,7 @@ Pass them as the third argument: `hotkeys.bind("mod+k", handler, { scope: "edito
 | --- | --- | --- |
 | `scope` | `"global"` | Scope the binding belongs to. `"*"` means active in every scope. See [Scopes](#scopes). |
 | `priority` | `0` | Higher wins when several bindings match. See [Priorities](#priorities-and-conflicts). |
-| `on` | `"keydown"` | `"keydown"` or `"keyup"`. |
+| `on` | `"keydown"` | `"keydown"` or `"keyup"`. Sequences need `"keydown"`. |
 | `enabled` | `true` | `false` turns it off. Pass a function `() => boolean` to decide at event time. |
 | `once` | `false` | Remove the binding after it fires once. |
 | `repeat` | `false` | Fire again while the key is held (OS auto-repeat). Ignored by default. |
@@ -100,6 +125,7 @@ Options for `createHotkeys({ ... })`:
 | `target` | `document` | Where to listen. Pass an element or `window` to narrow or widen it. |
 | `platform` | detected | `"mac"` or `"other"`. Changes what `mod` means. Handy in tests and SSR. |
 | `capture` | `false` | Listen in the capture phase (runs before handlers deeper in the page). |
+| `sequenceTimeout` | `1000` | Milliseconds allowed between the steps of a [sequence](#sequences). |
 | `defaults` | `{}` | Options applied to every `bind` of this engine, e.g. `{ ignoreInputs: false }`. |
 | `onConflict` | none | Called when a new binding conflicts with an existing one. |
 | `debug` | `false` | Without `onConflict`, log conflicts with `console.warn`. |
@@ -249,14 +275,41 @@ button.onclick = () => hotkeys.trigger("mod+k");
 
 Removes every binding, scope and listener. Call it when you are done with an engine you created yourself.
 
+## Recording shortcuts
+
+For a "customize your shortcuts" screen, `record()` waits for the user to press a combo and gives it back as a string you can store and pass to `bind`.
+
+```ts
+const combo = await hotkeys.record();      // the user presses Cmd+Shift+K
+// "mod+shift+k"  (or null if they pressed Escape)
+
+if (combo) {
+  settings.save("commandPalette", combo);
+  hotkeys.bind(combo, openPalette);
+}
+```
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `onChange` | none | Called while keys are pressed: `"mod"`, then `"mod+shift"`, then `"mod+shift+k"`. Use it for a live preview. |
+| `cancelKey` | `"escape"` | Key that cancels (resolves `null`) when pressed alone. Pass `null` to be able to record `escape` itself. |
+| `mod` | `true` | Write the platform's main modifier as `mod`, so a shortcut saved on a Mac also works on Windows. `false` keeps `meta`/`ctrl`. |
+| `modifierOnly` | `false` | Also accept just modifiers (`"shift"`), recorded when the user lets go of them. |
+| `signal` | none | An `AbortSignal`; aborting resolves `null`. |
+
+- While recording, **no binding fires and the keys do not reach the page**, so the user can try any combo safely. Keys the browser reserves (`Ctrl+W`, `Cmd+Q`) still cannot be captured.
+- Starting a new `record()` cancels the previous one (it resolves `null`).
+- `Option+A` on macOS is recorded as `alt+a`, and `Shift+/` as `?`, using the same rules as matching, so what you record always matches when pressed again.
+- Without a DOM (a server) the promise rejects with `HotkeysEnvironmentError`.
+
 ## Errors
 
 All errors extend `HotkeysError`, so `instanceof` works.
 
 | Error | When |
 | --- | --- |
-| `HotkeyParseError` | A combo is invalid: empty, `"ctrl+"`, `"k+ctrl"`, repeated modifier, two keys, spaces. It has a `combo` property and a message saying what is wrong. Thrown by `bind` and `formatHotkey`, so mistakes show up the first time you run the code. |
-| `HotkeysEnvironmentError` | `trigger` was called where `KeyboardEvent` does not exist. |
+| `HotkeyParseError` | A combo is invalid: empty, `"ctrl+"`, `"k+ctrl"`, repeated modifier, two keys, a modifier-only step in a sequence, a sequence on `keyup`. It has a `combo` property and a message saying what is wrong. Thrown by `bind` and `formatHotkey`, so mistakes show up the first time you run the code. |
+| `HotkeysEnvironmentError` | `trigger` or `record` was called where there is no DOM (`KeyboardEvent`, `document`). |
 
 ```ts
 import { HotkeyParseError } from "@usehotkeys/core";
@@ -318,6 +371,8 @@ For people who want to contribute or debug.
 - **No classes.** State lives in the closure that `createHotkeys` returns (the only classes are the error types).
 - **One listener pair.** The engine registers a single `keydown` and `keyup` on the target and does its own matching, so adding bindings never adds DOM listeners.
 - **Dispatch** (per event): drop IME events; collect candidates that match event type, repeat rule, enabled, active scope, element, keys and `ignoreInputs`; sort by priority, scope depth, then registration id; run the winner (and further ones only after `passthrough`). `once` bindings are removed before their handler runs.
+- **Sequences.** The engine keeps the last few non-modifier key presses with timestamps. A binding with N steps matches when the last N presses match its steps in order; presses older than `sequenceTimeout` are dropped, and the history is cleared after a sequence fires. Single combos are just sequences of one step.
+- **Recorder.** `record()` (in `record.ts`) adds capture-phase listeners that swallow the keys, pauses dispatch while active, and builds the combo string with the same key rules as the matcher.
 - **Lazy lifecycle.** Listeners attach on the first binding and detach on the last unbind.
 
 ## FAQ and known limits
@@ -326,6 +381,6 @@ For people who want to contribute or debug.
 
 **`keyup` on macOS with `Cmd` held.** The browser does not send `keyup` for non-modifier keys released while `Cmd` is down, so `{ on: "keyup" }` bindings combined with `meta` will not fire. Use `keydown`.
 
-**Key sequences (`g g`), a shortcut recorder, and double-tap/long-press** are planned, not available yet.
+**Double-tap and long-press shortcuts** are planned, not available yet.
 
 **Browser only.** The package never touches `window` or `document` on import, but it is meant for the browser; the server is a safe no-op.

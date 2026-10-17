@@ -13,10 +13,11 @@ pnpm add -E @usehotkeys/react @usehotkeys/core
 1. [Quick start](#quick-start)
 2. [`useHotkeys`](#usehotkeys)
 3. [`useHotkeyScope`](#usehotkeyscope)
-4. [`HotkeysProvider`](#hotkeysprovider)
-5. [Recipes](#recipes)
-6. [How it works](#how-it-works)
-7. [FAQ](#faq)
+4. [`useRecordHotkey`](#userecordhotkey)
+5. [`HotkeysProvider`](#hotkeysprovider)
+6. [Recipes](#recipes)
+7. [How it works](#how-it-works)
+8. [FAQ](#faq)
 
 ## Quick start
 
@@ -87,6 +88,41 @@ function Modal({ onClose }: { onClose: () => void }) {
 | --- | --- | --- |
 | `inherit` | `true` | `false` makes only this scope (and `scope: "*"` bindings) active. Use it for modals. |
 | `enabled` | `true` | Activate the scope only while `true`. |
+
+## `useRecordHotkey`
+
+```ts
+const { start, cancel, isRecording, preview, combo } = useRecordHotkey(options?);
+```
+
+Records the next combo the user presses (see [Recording shortcuts](#recording-shortcuts)) and keeps the UI state for you. Options are the same as `hotkeys.record`, except `onChange` and `signal`, which the hook manages.
+
+| Returned | Meaning |
+| --- | --- |
+| `start()` | Begin listening. Returns a promise with the combo, or `null` if cancelled. |
+| `cancel()` | Stop without recording. |
+| `isRecording` | `true` while listening. |
+| `preview` | What is held right now (`"mod+shift"`), for a live label. |
+| `combo` | The last recorded combo, or `null`. Cancelling keeps the previous one. |
+
+```tsx
+function ShortcutField({ value, onChange }: { value: string; onChange: (combo: string) => void }) {
+  const { start, isRecording, preview } = useRecordHotkey();
+
+  async function record() {
+    const combo = await start();
+    if (combo) onChange(combo);
+  }
+
+  return (
+    <button type="button" onClick={record}>
+      {isRecording ? preview || "Press the keys… (Esc to cancel)" : formatHotkey(value)}
+    </button>
+  );
+}
+```
+
+Recording stops by itself if the component unmounts.
 
 ## `HotkeysProvider`
 
