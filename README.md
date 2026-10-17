@@ -20,23 +20,32 @@ function App() {
 
 - [Packages](#packages)
 - [Part 1: Core (`@usehotkeys/core`)](#part-1-core-usehotkeyscore)
-  - [Core quick start](#core-quick-start) · [Writing combos](#writing-combos) · [Sequences](#sequences) · [Options](#options) · [Scopes](#scopes) · [Priorities and conflicts](#priorities-and-conflicts) · [Typing in inputs](#typing-in-inputs) · [Keyboard layouts](#keyboard-layouts) · [Reading state](#reading-state) · [Recording shortcuts](#recording-shortcuts) · [Errors](#errors) · [Core recipes](#core-recipes) · [How it works](#how-it-works) · [FAQ and known limits](#faq-and-known-limits)
+  - [Core quick start](#core-quick-start) · [Writing combos](#writing-combos) · [Sequences](#sequences) · [Options](#options) · [Scopes](#scopes) · [Priorities and conflicts](#priorities-and-conflicts) · [Typing in inputs](#typing-in-inputs) · [Keyboard layouts](#keyboard-layouts) · [Reading state](#reading-state) · [Recording shortcuts](#recording-shortcuts) · [Keymap](#keymap) · [Errors](#errors) · [Core recipes](#core-recipes) · [Compatibility and size](#compatibility-and-size) · [How it works](#how-it-works) · [FAQ and known limits](#faq-and-known-limits)
 - [Part 2: React (`@usehotkeys/react`)](#part-2-react-usehotkeysreact)
-  - [React quick start](#react-quick-start) · [`useHotkeys`](#usehotkeys) · [`useHotkeyScope`](#usehotkeyscope) · [`useRecordHotkey`](#userecordhotkey) · [`HotkeysProvider`](#hotkeysprovider) · [React recipes](#react-recipes) · [How the React hooks work](#how-the-react-hooks-work) · [React FAQ](#react-faq)
-- [Pending](#pending)
+  - [React quick start](#react-quick-start) · [`useHotkeys`](#usehotkeys) · [`useHotkeyAction`](#usehotkeyaction) · [`useHotkeyScope`](#usehotkeyscope) · [`useBindings`](#usebindings) · [`useShortcuts`](#useshortcuts) · [`useRecordHotkey`](#userecordhotkey) · [`HotkeysProvider`](#hotkeysprovider) · [React recipes](#react-recipes) · [Next.js and server rendering](#nextjs-and-server-rendering) · [How the React hooks work](#how-the-react-hooks-work) · [React FAQ](#react-faq)
 - [Contributing](#contributing) · [License](#license)
+- [Pending](#pending)
 
 ## Packages
 
 | Package | What it is | Use it when |
 | --- | --- | --- |
 | [`@usehotkeys/core`](./packages/core) | The engine. No dependencies, no framework. | Vanilla JS, Vue, Svelte, Angular, or building your own bindings. |
-| [`@usehotkeys/react`](./packages/react) | `useHotkeys`, `useHotkeyScope`, `<HotkeysProvider>`. | React 18 or 19. It installs on top of core. |
+| [`@usehotkeys/react`](./packages/react) | `useHotkeys`, `useHotkeyAction`, `useHotkeyScope`, `useBindings`, `useShortcuts`, `useRecordHotkey`, `<HotkeysProvider>`. | React 18 or 19. It installs on top of core. |
 
 ```bash
 pnpm add -E @usehotkeys/react @usehotkeys/core   # React
 pnpm add -E @usehotkeys/core                     # anything else
 ```
+
+**Bundle size** (the published ESM build, minified with esbuild; peer dependencies not included):
+
+| Package | Minified | Gzip | Brotli |
+| --- | --- | --- | --- |
+| `@usehotkeys/core` | 14.4 KB | 6.0 KB | 5.4 KB |
+| `@usehotkeys/react` (on top of core) | 3.0 KB | 1.3 KB | 1.2 KB |
+
+Both packages have zero runtime dependencies. The core is a single module, so bundlers include all of it (sequences, keymap, recorder) even if you use only a part.
 
 ## Part 1: Core (`@usehotkeys/core`)
 
@@ -104,7 +113,7 @@ How they behave:
 - **Any other key breaks it.** `g`, `x`, `i` does not fire `"g i"`. Modifier presses between steps (holding `Ctrl` from step to step) are fine, and a held-down key (auto-repeat) counts once.
 - **After it fires, it starts over**, so `"g g"` needs two new presses each time.
 - **Every step is a full combo**, with its own modifiers. A step cannot be modifiers only (`"g shift"` is an error).
-- **Priority works as usual.** If `"g"` and `"g g"` are both bound, the single `g` fires immediately on the first press (there is no waiting to see what comes next) and the longer sequence wins on the second. Avoid binding a key and a sequence that starts with it, or give them different `priority`.
+- **Prefix bindings wait, like Vim.** If you bind both `"g"` and `"g g"`, pressing `g` does not fire `"g"` yet: the engine waits up to `sequenceTimeout` to see whether a second `g` follows. If it does, only `"g g"` fires. If a different key comes, or the time runs out, `"g"` fires then. The wait happens only when a longer sequence starting with the same keys is bound, enabled and in an active scope; a lone `"g"` fires instantly. The key's default action is cancelled right away (when `preventDefault` is on), and `trigger()` never waits.
 - **Typing in inputs:** `ignoreInputs: "auto"` looks at the last step, so `"g i"` does not fire while typing, but `"mod+k mod+s"` does.
 - **Only on `keydown`.** `{ on: "keyup" }` with a sequence throws `HotkeyParseError`.
 - **`preventDefault` applies to the final step.** Earlier keys keep their normal behaviour.
@@ -140,7 +149,9 @@ Options for `createHotkeys({ ... })`:
 | `target` | `document` | Where to listen. Pass an element or `window` to narrow or widen it. |
 | `platform` | detected | `"mac"` or `"other"`. Changes what `mod` means. Handy in tests and SSR. |
 | `capture` | `false` | Listen in the capture phase (runs before handlers deeper in the page). |
-| `sequenceTimeout` | `1000` | Milliseconds allowed between the steps of a [sequence](#sequences). |
+| `sequenceTimeout` | `1000` | Milliseconds allowed between the steps of a [sequence](#sequences), and how long a [prefix binding](#sequences) waits. |
+| `keymap` | none | Named actions with default shortcuts. See [Keymap](#keymap). |
+| `overrides` | none | The user's saved shortcut changes, applied on top of the keymap. |
 | `defaults` | `{}` | Options applied to every `bind` of this engine, e.g. `{ ignoreInputs: false }`. |
 | `onConflict` | none | Called when a new binding conflicts with an existing one. |
 | `debug` | `false` | Without `onConflict`, log conflicts with `console.warn`. |
@@ -257,6 +268,18 @@ hotkeys.getBindings();
 
 `active` is `false` when the binding is disabled or its scope is not live right now.
 
+#### `subscribe(listener)` and `notify()`: react to changes
+
+```ts
+const stop = hotkeys.subscribe(() => {
+  renderHelp(hotkeys.getBindings());
+});
+```
+
+The listener runs whenever a binding is added or removed (including `once` bindings firing), a scope opens or closes, or a shortcut changes. `getBindings()` and `getShortcuts()` return the **same array** until then, so they work directly with React's `useSyncExternalStore`. The arrays are read-only.
+
+The engine cannot see what an `enabled` function reads. If that changes, call `hotkeys.notify()` so subscribers refresh `active`.
+
 #### `formatHotkey(combo)`: show it to the user
 
 ```ts
@@ -317,6 +340,49 @@ if (combo) {
 - `Option+A` on macOS is recorded as `alt+a`, and `Shift+/` as `?`, using the same rules as matching, so what you record always matches when pressed again.
 - Without a DOM (a server) the promise rejects with `HotkeysEnvironmentError`.
 
+### Keymap
+
+So far a shortcut was written next to the code that runs it. A **keymap** separates the two: you name an *action* once, give it default keys, and the user can change the keys later without any code change.
+
+```ts
+const hotkeys = createHotkeys({
+  keymap: {
+    openPalette: { keys: "mod+k", label: "Open command palette", group: "Navigation" },
+    save: "mod+s",
+    goInbox: "g i",
+  },
+  overrides: JSON.parse(localStorage.getItem("shortcuts") ?? "{}"), // the user's saved changes
+});
+
+hotkeys.bindAction("openPalette", () => openPalette());
+hotkeys.bindAction("save", save);
+```
+
+An entry is the keys (`"mod+k"`, `["j", "arrowdown"]`, a sequence), or an object with `keys` plus `label`, `description` and `group`. Bindings of the action inherit that metadata, so `getBindings()` can build a help screen with no extra work. `bindAction` takes the same options as `bind`.
+
+| Method | What it does |
+| --- | --- |
+| `bindAction(action, handler, options?)` | Like `bind`, but the keys come from the keymap. Returns the unbind function. |
+| `setShortcut(action, keys)` | Change an action's keys. `null` goes back to the default, `[]` removes the shortcut. Existing bindings follow the change immediately; nothing is re-registered. |
+| `getShortcuts()` | Every action with `keys`, `defaultKeys`, `customized`, `label`, `group`... for a settings screen. |
+| `getOverrides()` | Only what the user changed, `{ openPalette: ["mod+p"] }`, ready to save. |
+| `subscribe(listener)` | Called after any change, so a settings screen can re-render. |
+
+**Letting users change a shortcut** (record, apply, save):
+
+```ts
+const combo = await hotkeys.record();
+if (combo) {
+  hotkeys.setShortcut("openPalette", combo);
+  localStorage.setItem("shortcuts", JSON.stringify(hotkeys.getOverrides()));
+}
+```
+
+- **Saving is yours.** The library never touches storage. Pass what you saved as `overrides` next time. Saved combos use `mod`, so they work across platforms.
+- **Everything is validated up front.** An invalid combo in `keymap`/`overrides` throws `HotkeyParseError` from `createHotkeys`; an unknown action throws `UnknownActionError` from `bindAction`, `setShortcut` and `overrides`.
+- **Conflicts are still reported.** If the user gives two actions the same keys, `onConflict` / `getConflicts()` tell you (see [Priorities and conflicts](#priorities-and-conflicts)).
+- A sequence cannot be assigned to an action that is bound with `on: "keyup"`; `setShortcut` throws and changes nothing.
+
 ### Errors
 
 All errors extend `HotkeysError`, so `instanceof` works.
@@ -324,6 +390,7 @@ All errors extend `HotkeysError`, so `instanceof` works.
 | Error | When |
 | --- | --- |
 | `HotkeyParseError` | A combo is invalid: empty, `"ctrl+"`, `"k+ctrl"`, repeated modifier, two keys, a modifier-only step in a sequence, a sequence on `keyup`. It has a `combo` property and a message saying what is wrong. Thrown by `bind` and `formatHotkey`, so mistakes show up the first time you run the code. |
+| `UnknownActionError` | `bindAction`, `setShortcut` or `overrides` named an action that is not in the `keymap`. It has an `action` property. |
 | `HotkeysEnvironmentError` | `trigger` or `record` was called where there is no DOM (`KeyboardEvent`, `document`). |
 
 ```ts
@@ -376,7 +443,20 @@ const hotkeys = createHotkeys({ target: widgetElement, platform: "other" });
 hotkeys.destroy();
 ```
 
-**Use it with Vue / Svelte / Angular**: create the engine once, `bind` when the component mounts, call the returned function when it unmounts. That is all the React package does.
+**Use it with any framework**: create the engine once, `bind` when the component mounts in the browser, and call the function `bind` returned when it unmounts. That is all the React package does.
+
+### Compatibility and size
+
+| | |
+| --- | --- |
+| Browsers | Modern evergreen browsers (the build targets ES2022, so browsers from 2021 onwards). No IE, no polyfills. |
+| React (`@usehotkeys/react`) | React 18 and 19. CI runs the hook tests against both. |
+| Other frameworks | Any. The core has no framework code: create one engine, `bind` when the component mounts in the browser, and call the returned function when it unmounts. |
+| TypeScript | Written in strict TypeScript; types are included. |
+| Module formats | ESM and CommonJS, each with matching type declarations. |
+| Dependencies | None. `@usehotkeys/react` has `react` and `@usehotkeys/core` as peer dependencies. |
+| Size | About 6 KB minified + gzipped for `@usehotkeys/core`, and about 1.3 KB for `@usehotkeys/react` on top of it. |
+| Server | Importing the packages or creating an engine on a server does nothing: no DOM access at import time, and nothing is attached until the first `bind`. Handling keys only makes sense in the browser. |
 
 ### How it works
 
@@ -388,6 +468,8 @@ For people who want to contribute or debug.
 - **Dispatch** (per event): drop IME events; collect candidates that match event type, repeat rule, enabled, active scope, element, keys and `ignoreInputs`; sort by priority, scope depth, then registration id; run the winner (and further ones only after `passthrough`). `once` bindings are removed before their handler runs.
 - **Sequences.** The engine keeps the last few non-modifier key presses with timestamps. A binding with N steps matches when the last N presses match its steps in order; presses older than `sequenceTimeout` are dropped, and the history is cleared after a sequence fires. Single combos are just sequences of one step.
 - **Recorder.** `record()` (in `record.ts`) adds capture-phase listeners that swallow the keys, pauses dispatch while active, and builds the combo string with the same key rules as the matcher.
+- **Change tracking.** Every change bumps a `version` and calls subscribers. `getBindings()`/`getShortcuts()` cache their result per version, which is what makes them safe for `useSyncExternalStore`.
+- **Keymap.** Action bindings store the action id, not fixed keys; `setShortcut` re-parses the keys of the affected entries in place, so they keep their registration order.
 - **Lazy lifecycle.** Listeners attach on the first binding and detach on the last unbind.
 
 ### FAQ and known limits
@@ -449,6 +531,27 @@ Things worth knowing:
 - **Conflicts between components are resolved for you.** If two mounted components bind `escape`, the highest `priority` wins, then the most recently mounted. See [Priorities and conflicts](#priorities-and-conflicts).
 - **Typing in inputs is handled.** Plain keys do not fire while the user types; `mod+s` does. Change it with `ignoreInputs`. See [Typing in inputs](#typing-in-inputs).
 
+### `useHotkeyAction`
+
+```ts
+useHotkeyAction(action, handler, options?)
+```
+
+Like `useHotkeys`, but the keys come from the **keymap** (see [Keymap](#keymap)) instead of being written in the component. If the user changes the shortcut later, the binding follows it without re-registering.
+
+```tsx
+<HotkeysProvider options={{ keymap: { openPalette: { keys: "mod+k", label: "Open palette" } } }}>
+  <App />
+</HotkeysProvider>
+
+function App() {
+  useHotkeyAction("openPalette", () => setOpen(true));
+  // ...
+}
+```
+
+An action that is not in the keymap throws `UnknownActionError`. The options are the same as `useHotkeys`.
+
 ### `useHotkeyScope`
 
 ```ts
@@ -471,6 +574,77 @@ function Modal({ onClose }: { onClose: () => void }) {
 | --- | --- | --- |
 | `inherit` | `true` | `false` makes only this scope (and `scope: "*"` bindings) active. Use it for modals. |
 | `enabled` | `true` | Activate the scope only while `true`. |
+
+### `useBindings`
+
+```ts
+const bindings = useBindings({ activeOnly?, labeledOnly?, group?, scope? });
+```
+
+Returns every shortcut registered in the app and **stays up to date**: it re-renders when a component mounts or unmounts a hotkey, a scope opens or closes, or `enabled` flips. Use it for a "keyboard shortcuts" help dialog.
+
+| Filter | Meaning |
+| --- | --- |
+| `activeOnly` | Only shortcuts that can fire right now: enabled and in an active scope. |
+| `labeledOnly` | Only shortcuts with a `label` (skips the ones you did not name). |
+| `group` | Only this `group`. |
+| `scope` | Only this `scope`. |
+
+```tsx
+import { formatHotkey } from "@usehotkeys/core";
+import { useBindings } from "@usehotkeys/react";
+
+function ShortcutsHelp() {
+  const bindings = useBindings({ activeOnly: true, labeledOnly: true });
+  return (
+    <ul>
+      {bindings.map((b) => (
+        <li key={b.id}>
+          {b.label}: <kbd>{formatHotkey(b.combos[0]!)}</kbd>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Each item has `label`, `description`, `group`, `combos`, `scope`, `priority`, `active` and `action`. It lists what is *registered*; if you want the keys the user customised, use `useShortcuts`.
+
+### `useShortcuts`
+
+```ts
+const shortcuts = useShortcuts({ group? });
+```
+
+Every action of the keymap with its current keys, kept up to date: `action`, `keys`, `defaultKeys`, `customized`, `label`, `description`, `group`. Combine it with `useRecordHotkey` for a settings screen:
+
+```tsx
+function ShortcutSettings() {
+  const hotkeys = useHotkeysInstance();
+  const shortcuts = useShortcuts();
+  const { start, isRecording } = useRecordHotkey();
+
+  async function change(action: string) {
+    const combo = await start();
+    if (combo) {
+      hotkeys.setShortcut(action, combo);
+      localStorage.setItem("shortcuts", JSON.stringify(hotkeys.getOverrides()));
+    }
+  }
+
+  return (
+    <ul>
+      {shortcuts.map((s) => (
+        <li key={s.action}>
+          {s.label ?? s.action}: <kbd>{s.keys.map((k) => formatHotkey(k)).join(", ") || "none"}</kbd>
+          <button type="button" onClick={() => change(s.action)} disabled={isRecording}>Change</button>
+          {s.customized && <button type="button" onClick={() => hotkeys.setShortcut(s.action, null)}>Reset</button>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
 
 ### `useRecordHotkey`
 
@@ -524,23 +698,20 @@ import { HotkeysProvider } from "@usehotkeys/react";
 | `options` | [`createHotkeys` options](#options) for the engine the provider creates: `platform`, `capture`, `defaults`, `onConflict`, `debug`. |
 | `hotkeys` | Pass an engine you created yourself (e.g. to also use it outside React). |
 
-`useHotkeysInstance()` returns the engine in use, so you can call `getBindings()` for a help dialog or `formatHotkey`:
+`useHotkeysInstance()` returns the engine in use, for calling methods directly such as `setShortcut`, `getOverrides` or `trigger`. For lists, use [`useBindings`](#usebindings) and [`useShortcuts`](#useshortcuts), which stay up to date.
 
-```tsx
-import { formatHotkey } from "@usehotkeys/core";
-import { useHotkeysInstance } from "@usehotkeys/react";
+Engine methods that have no hook of their own are available on that instance:
 
-function ShortcutsHelp() {
-  const hotkeys = useHotkeysInstance();
-  return (
-    <ul>
-      {hotkeys.getBindings().filter((b) => b.active && b.label).map((b) => (
-        <li key={b.id}>{b.label}: <kbd>{formatHotkey(b.combos[0]!)}</kbd></li>
-      ))}
-    </ul>
-  );
-}
-```
+| Method | Use it for |
+| --- | --- |
+| `getBindings()` | A one-time read of the registered shortcuts. It does not re-render; use `useBindings` in components. |
+| `getConflicts()` | Checking for competing shortcuts, e.g. in a test or a dev-only effect. |
+| `getActiveScopes()` | Seeing which scopes are active right now. |
+| `isPressed(key)` | Whether a key is held. Read it inside event handlers, not while rendering: it is not reactive. |
+| `trigger(combo)` | Running a shortcut from a button so both do the same thing. |
+| `notify()` | Telling `useBindings` to refresh when something an `enabled` function reads has changed. |
+
+Each is explained in the [core README](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#reading-state).
 
 Providers nest: a hook uses the nearest one. In tests, wrap components in a provider with `options={{ platform: "other" }}` to make `mod` deterministic.
 
@@ -576,11 +747,51 @@ useHotkeys("escape", closeChild, { priority: 10, passthrough: true });
 useHotkeys("enter", dismissBanner, { once: true });
 ```
 
-**Next.js / SSR**: hooks only register inside effects, so nothing runs on the server. Use them in Client Components (`"use client"`).
+**Next.js / SSR**: see [Next.js and server rendering](#nextjs-and-server-rendering).
+
+### Next.js and server rendering
+
+- **The hooks are safe on the server.** `useHotkeys`, `useHotkeyAction` and `useHotkeyScope` only touch the engine inside effects, which never run on the server. `useBindings` and `useShortcuts` render an empty list on the server and while hydrating, then fill in, so there is no hydration mismatch.
+- **App Router.** The package ships with a `"use client"` directive, so you can import `HotkeysProvider` straight into a Server Component such as `app/layout.tsx`. Your own components that *call* a hook need `"use client"` at the top of their file, like with any React hook.
+
+  ```tsx
+  // app/layout.tsx (a Server Component)
+  import { HotkeysProvider } from "@usehotkeys/react";
+
+  export default function RootLayout({ children }: { children: React.ReactNode }) {
+    return (
+      <html lang="en">
+        <body>
+          <HotkeysProvider>{children}</HotkeysProvider>
+        </body>
+      </html>
+    );
+  }
+  ```
+
+  ```tsx
+  // app/command-palette.tsx
+  "use client";
+
+  import { useHotkeys } from "@usehotkeys/react";
+  import { useState } from "react";
+
+  export function CommandPalette() {
+    const [open, setOpen] = useState(false);
+    useHotkeys("mod+k", () => setOpen(true));
+    return open ? <dialog open>…</dialog> : null;
+  }
+  ```
+
+- **Functions cannot cross the server/client boundary.** If you need `options.onConflict` or `options.defaults.ignoreInputs` as a function, build the provider in your own `"use client"` component instead of passing those props from a Server Component.
+- **No leaks between requests.** Without a provider the hooks share one engine that attaches nothing until a binding exists, and bindings only exist in browsers, so a server rendering many requests never accumulates shortcuts.
+- Pages Router, Remix, Vite SSR and Astro islands follow the same rule: hooks go in components that render on the client.
 
 ### How the React hooks work
 
 - `useHotkeys` stores the latest `handler` and options in a ref and runs one `useEffect` that calls `hotkeys.bind(...)` and returns the unbind function. The effect depends on the combo and the static options only, so it is StrictMode-safe (mount, unmount, mount again leaves exactly one binding).
+- `useHotkeyAction` shares its implementation with `useHotkeys` and calls `hotkeys.bindAction`, so changing a shortcut never re-registers.
+- `useBindings` and `useShortcuts` use `useSyncExternalStore` with the engine's `subscribe` and its cached snapshots; they re-render only when something changed.
 - `useHotkeyScope` runs `hotkeys.pushScope(...)` in an effect and returns its disposer.
 - The engine is created lazily on first use (or by `HotkeysProvider`), and attaches DOM listeners only while at least one binding exists.
 - Source is three small files in `src/`: `context.tsx`, `use-hotkeys.ts`, `use-hotkey-scope.ts`.
@@ -593,17 +804,19 @@ useHotkeys("enter", dismissBanner, { once: true });
 
 **Does re-rendering reset the binding order?** No. Handler, `enabled` and function `ignoreInputs` changes do not re-register. Only changes to the combo or static options do, and then the binding counts as "most recent" again.
 
-## Pending
-
-Not implemented yet:
-
-- **`useIsPressed`**: a React hook that re-renders while a key or combo is held.
-- **`doubleTap` and `hold`**: double-tap (`shift` twice) and long-press shortcuts.
-
 ## Contributing
 
 Setup, the checks to run before a pull request, and how to try the built packages locally are in [CONTRIBUTING.md](./CONTRIBUTING.md#development-workflow).
 
+Changelogs: [`@usehotkeys/core`](./packages/core/CHANGELOG.md) · [`@usehotkeys/react`](./packages/react/CHANGELOG.md).
+
 ## License
 
 [ISC](./LICENSE)
+
+## Pending
+
+Still pending:
+
+- **`useIsPressed`**: a React hook that re-renders while a key or combo is held.
+- **`doubleTap` and `hold`**: double-tap (`shift` twice) and long-press shortcuts.
