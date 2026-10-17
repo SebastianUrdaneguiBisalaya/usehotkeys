@@ -1,17 +1,17 @@
 {
-  "name": "node-sdk-template",
+  "name": "usehotkeys",
   "version": "0.0.0",
-  "description": "Monorepo workspace root: Node.js SDK template (packages/core) + docs website (apps/website).",
+  "description": "Framework-agnostic keyboard shortcut engine (core) with React bindings. pnpm workspace root.",
   "license": "ISC",
   "private": true,
   "scripts": {
-    "build": "pnpm --filter ./packages/* run build",
-    "dev": "pnpm --filter ./packages/core run dev",
-    "typecheck": "pnpm --filter ./packages/* run typecheck",
+    "build": "pnpm --filter \"./packages/*\" run build",
+    "dev": "pnpm --filter \"./packages/*\" run --parallel dev",
+    "typecheck": "pnpm --filter \"./packages/*\" run typecheck",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "test": "pnpm --filter ./packages/* run test",
+    "test": "pnpm --filter \"./packages/*\" run test",
     "test:watch": "pnpm --filter ./packages/core run test:watch",
     "prepare": "husky"
   },

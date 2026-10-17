@@ -1,27 +1,31 @@
 {
-  "name": "node-sdk-template",
+  "name": "@usehotkeys/core",
   "version": "0.1.0",
-  "description": "Template for a Node.js SDK in TypeScript wrapping a third-party HTTP API, with dual ESM/CJS support.",
+  "description": "Framework-agnostic keyboard shortcut engine: combos, priorities, scopes and conflict resolution.",
   "keywords": [
-    "sdk",
-    "typescript",
-    "template",
-    "tsup",
-    "esm",
-    "cjs"
+    "hotkeys",
+    "keyboard",
+    "shortcuts",
+    "keybindings",
+    "scopes",
+    "typescript"
   ],
   "license": "ISC",
   "author": "",
-  "private": true,
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
@@ -50,9 +54,12 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "4.1.11",
+    "jsdom": "30.1.3",
     "tsup": "8.5.1",
     "tsx": "4.23.13",
     "typescript": "5.7.3",
     "vitest": "4.1.11"
-  }
+  },
+  "private": true
 }
