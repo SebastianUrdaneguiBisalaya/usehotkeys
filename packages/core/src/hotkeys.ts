@@ -1,5 +1,5 @@
 import { detectPlatform } from "./environment.js";
-import { HotkeysEnvironmentError } from "./errors.js";
+import { HotkeyParseError, HotkeysEnvironmentError } from "./errors.js";
 import { getEventTarget, isEditable } from "./filter.js";
 import {
   codeToName,
@@ -9,7 +9,12 @@ import {
   normalizeEventKey,
 } from "./keys.js";
 import { matchesEvent } from "./matcher.js";
-import { type ParsedCombo, parseCombo } from "./parser.js";
+import {
+  type ParsedCombo,
+  type ParsedSequence,
+  parseSequence,
+} from "./parser.js";
+import { type Recording, startRecording } from "./record.js";
 import type {
   BindingInfo,
   HotkeyConflict,
@@ -25,10 +30,12 @@ import type {
 
 const GLOBAL_SCOPE = "global";
 const ALL_SCOPES = "*";
+const DEFAULT_SEQUENCE_TIMEOUT = 1000;
+const MAX_HISTORY = 8;
 
 type Entry = {
   id: number;
-  combos: ParsedCombo[];
+  sequences: ParsedSequence[];
   handler: HotkeyHandler;
   scope: string;
   priority: number;
@@ -56,8 +63,13 @@ type ScopeFrame = {
 
 type Candidate = {
   entry: Entry;
-  combo: ParsedCombo;
+  sequence: ParsedSequence;
   depth: number;
+};
+
+type HistoryItem = {
+  event: KeyboardEvent;
+  time: number;
 };
 
 const MODIFIER_KEYS = new Set([
@@ -66,6 +78,9 @@ const MODIFIER_KEYS = new Set([
   "meta",
   "shift",
 ]);
+
+const isModifierEvent = (event: KeyboardEvent) =>
+  MODIFIER_KEYS.has(normalizeEventKey(event.key ?? ""));
 
 /**
  * Creates a keyboard-shortcut engine.
@@ -82,6 +97,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
   const platform = options.platform ?? detectPlatform();
   const capture = options.capture ?? false;
   const defaults = options.defaults ?? {};
+  const sequenceTimeout = options.sequenceTimeout ?? DEFAULT_SEQUENCE_TIMEOUT;
 
   const entries = new Map<number, Entry>();
   const scopeStack: ScopeFrame[] = [
@@ -92,10 +108,16 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     },
   ];
   const pressed = new Map<string, string>();
+  /** Recent non-modifier key presses, used to match sequences such as "g i". */
+  let history: HistoryItem[] = [];
   let nextEntryId = 1;
   let nextScopeId = 1;
   let listening = false;
   let listenTarget: EventTarget | undefined;
+  let activeRecording: Recording | undefined;
+
+  const resolveTarget = (): EventTarget | undefined =>
+    options.target ?? (typeof document === "undefined" ? undefined : document);
 
   /** Active scope names mapped to their depth in the stack (deeper = closer to the top). */
   const activeScopeDepths = (): Map<string, number> => {
@@ -125,7 +147,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     const enabled = isEnabled(entry);
     return {
       active: enabled && depthOf(entry, depths) !== undefined,
-      combos: entry.combos.map((combo) => combo.raw),
+      combos: entry.sequences.map((sequence) => sequence.raw),
       enabled,
       id: entry.id,
       on: entry.on,
@@ -165,6 +187,63 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     return target?.closest?.(mode) != null;
   };
 
+  /** Records a key press for sequence matching. Modifier presses and auto-repeat do not count. */
+  const pushHistory = (event: KeyboardEvent) => {
+    if (event.repeat || isModifierEvent(event)) {
+      return;
+    }
+    const now = Date.now();
+    const last = history[history.length - 1];
+    if (last !== undefined && now - last.time > sequenceTimeout) {
+      history = [];
+    }
+    history.push({
+      event,
+      time: now,
+    });
+    if (history.length > MAX_HISTORY) {
+      history.shift();
+    }
+  };
+
+  /** The key presses a binding is matched against: the recent history, or just this event. */
+  const eventWindow = (
+    event: KeyboardEvent,
+    type: "keydown" | "keyup",
+  ): KeyboardEvent[] => {
+    const last = history[history.length - 1];
+    if (
+      type === "keyup" ||
+      event.repeat ||
+      isModifierEvent(event) ||
+      last?.event !== event
+    ) {
+      return [
+        event,
+      ];
+    }
+    return history.map((item) => item.event);
+  };
+
+  const matchesSequence = (
+    entry: Entry,
+    sequence: ParsedSequence,
+    window: KeyboardEvent[],
+  ): boolean => {
+    const offset = window.length - sequence.steps.length;
+    return (
+      offset >= 0 &&
+      sequence.steps.every((step, index) =>
+        matchesEvent(
+          step,
+          window[offset + index] as KeyboardEvent,
+          entry.layout,
+          entry.exact,
+        ),
+      )
+    );
+  };
+
   const dispatch = (
     event: KeyboardEvent,
     type: "keydown" | "keyup",
@@ -175,6 +254,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     }
 
     const depths = activeScopeDepths();
+    const window = eventWindow(event, type);
     const candidates: Candidate[] = [];
     for (const entry of entries.values()) {
       if (entry.on !== type || (event.repeat && !entry.repeat)) {
@@ -190,29 +270,36 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
           continue;
         }
       }
-      const combo = entry.combos.find((candidate) =>
-        matchesEvent(candidate, event, entry.layout, entry.exact),
+      const sequence = entry.sequences.find((candidate) =>
+        matchesSequence(entry, candidate, window),
       );
-      if (combo === undefined || shouldIgnore(entry, combo, event)) {
+      if (sequence === undefined) {
+        continue;
+      }
+      const lastStep = sequence.steps[sequence.steps.length - 1] as ParsedCombo;
+      if (shouldIgnore(entry, lastStep, event)) {
         continue;
       }
       candidates.push({
-        combo,
         depth,
         entry,
+        sequence,
       });
     }
 
-    // Highest priority first, then the scope closest to the top of the stack, then the most recent binding.
+    // Highest priority first, then the scope closest to the top of the stack, then the longest
+    // sequence, then the most recent binding.
     candidates.sort(
       (a, b) =>
         b.entry.priority - a.entry.priority ||
         b.depth - a.depth ||
+        b.sequence.steps.length - a.sequence.steps.length ||
         b.entry.id - a.entry.id,
     );
 
     let handled = false;
-    for (const { combo, entry } of candidates) {
+    let completedSequence = false;
+    for (const { entry, sequence } of candidates) {
       if (entry.once) {
         entries.delete(entry.id);
       }
@@ -222,14 +309,18 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       if (entry.stopPropagation) {
         event.stopPropagation();
       }
+      completedSequence ||= sequence.steps.length > 1;
       entry.handler(event, {
         binding: toInfo(entry, depths),
-        combo: combo.raw,
+        combo: sequence.raw,
       });
       handled = true;
       if (!entry.passthrough) {
         break;
       }
+    }
+    if (completedSequence) {
+      history = [];
     }
     if (entries.size === 0) {
       sync();
@@ -238,15 +329,22 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
   };
 
   const onKeyDown = (event: Event) => {
+    if (activeRecording !== undefined) {
+      return;
+    }
     const keyboardEvent = event as KeyboardEvent;
     pressed.set(
       keyboardEvent.code || keyboardEvent.key,
       normalizeEventKey(keyboardEvent.key),
     );
+    pushHistory(keyboardEvent);
     dispatch(keyboardEvent, "keydown");
   };
 
   const onKeyUp = (event: Event) => {
+    if (activeRecording !== undefined) {
+      return;
+    }
     const keyboardEvent = event as KeyboardEvent;
     pressed.delete(keyboardEvent.code || keyboardEvent.key);
     // macOS never sends keyup for keys released while Cmd is held, so they would stay "pressed".
@@ -260,27 +358,28 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     dispatch(keyboardEvent, "keyup");
   };
 
-  const resetPressed = () => pressed.clear();
+  const resetState = () => {
+    pressed.clear();
+    history = [];
+  };
   const onVisibilityChange = () => {
     if (
       typeof document !== "undefined" &&
       document.visibilityState === "hidden"
     ) {
-      pressed.clear();
+      resetState();
     }
   };
 
   const attach = () => {
-    listenTarget =
-      options.target ??
-      (typeof document === "undefined" ? undefined : document);
+    listenTarget = resolveTarget();
     if (listenTarget === undefined) {
       return;
     }
     listenTarget.addEventListener("keydown", onKeyDown, capture);
     listenTarget.addEventListener("keyup", onKeyUp, capture);
     if (typeof window !== "undefined") {
-      window.addEventListener("blur", resetPressed);
+      window.addEventListener("blur", resetState);
     }
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", onVisibilityChange);
@@ -292,14 +391,14 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     listenTarget?.removeEventListener("keydown", onKeyDown, capture);
     listenTarget?.removeEventListener("keyup", onKeyUp, capture);
     if (typeof window !== "undefined") {
-      window.removeEventListener("blur", resetPressed);
+      window.removeEventListener("blur", resetState);
     }
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     }
     listenTarget = undefined;
     listening = false;
-    pressed.clear();
+    resetState();
   };
 
   function sync() {
@@ -346,10 +445,10 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       if (entry.passthrough) {
         continue;
       }
-      for (const combo of entry.combos) {
-        const key = conflictKey(entry, combo.signature);
+      for (const sequence of entry.sequences) {
+        const key = conflictKey(entry, sequence.signature);
         const group = groups.get(key) ?? {
-          combo: combo.signature,
+          combo: sequence.signature,
           members: [],
           scope: entry.scope,
         };
@@ -395,7 +494,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       ...defaults,
       ...stripUndefined(bindOptions),
     };
-    const combos = (
+    const sequences = (
       typeof combo === "string"
         ? [
             combo,
@@ -403,9 +502,18 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
         : [
             ...combo,
           ]
-    ).map((raw) => parseCombo(raw, platform));
+    ).map((raw) => parseSequence(raw, platform));
+    const on = merged.on ?? "keydown";
+    const keyupSequence = sequences.find(
+      (sequence) => sequence.steps.length > 1,
+    );
+    if (on === "keyup" && keyupSequence !== undefined) {
+      throw new HotkeyParseError(
+        keyupSequence.raw,
+        'sequences only work with on: "keydown".',
+      );
+    }
     const entry: Entry = {
-      combos,
       description: merged.description,
       element: merged.element ?? null,
       enabled: merged.enabled ?? true,
@@ -416,13 +524,14 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       ignoreInputs: merged.ignoreInputs ?? "auto",
       label: merged.label,
       layout: merged.layout ?? "logical",
-      on: merged.on ?? "keydown",
+      on,
       once: merged.once ?? false,
       passthrough: merged.passthrough ?? false,
       preventDefault: merged.preventDefault ?? true,
       priority: merged.priority ?? 0,
       repeat: merged.repeat ?? false,
       scope: merged.scope ?? GLOBAL_SCOPE,
+      sequences,
       stopPropagation: merged.stopPropagation ?? false,
     };
     entries.set(entry.id, entry);
@@ -453,24 +562,37 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     };
   };
 
+  const simulate = (step: ParsedCombo): KeyboardEvent =>
+    new KeyboardEvent("keydown", {
+      altKey: step.alt,
+      bubbles: true,
+      cancelable: true,
+      code: step.modifierOnly ? "" : nameToCode(step.key),
+      ctrlKey: step.ctrl,
+      key: nameToEventKey(step.key),
+      metaKey: step.meta,
+      shiftKey: step.shift,
+    });
+
   const trigger = (combo: string): boolean => {
     if (typeof KeyboardEvent === "undefined") {
       throw new HotkeysEnvironmentError(
         "trigger() needs KeyboardEvent, which is not available in this environment.",
       );
     }
-    const parsed = parseCombo(combo, platform);
-    const event = new KeyboardEvent("keydown", {
-      altKey: parsed.alt,
-      bubbles: true,
-      cancelable: true,
-      code: parsed.modifierOnly ? "" : nameToCode(parsed.key),
-      ctrlKey: parsed.ctrl,
-      key: nameToEventKey(parsed.key),
-      metaKey: parsed.meta,
-      shiftKey: parsed.shift,
-    });
-    return dispatch(event, "keydown");
+    const sequence = parseSequence(combo, platform);
+    const savedHistory = history;
+    history = [];
+    try {
+      const events = sequence.steps.map(simulate);
+      for (const event of events) {
+        pushHistory(event);
+      }
+      // Earlier steps only fill the history; just the final step is dispatched.
+      return dispatch(events[events.length - 1] as KeyboardEvent, "keydown");
+    } finally {
+      history = savedHistory;
+    }
   };
 
   const isPressed = (key: string): boolean => {
@@ -483,9 +605,23 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     return false;
   };
 
+  const record: Hotkeys["record"] = (recordOptions = {}) => {
+    activeRecording?.cancel();
+    const recording = startRecording(resolveTarget(), platform, recordOptions);
+    activeRecording = recording;
+    const done = () => {
+      if (activeRecording === recording) {
+        activeRecording = undefined;
+      }
+    };
+    recording.promise.then(done, done);
+    return recording.promise;
+  };
+
   return {
     bind,
     destroy: () => {
+      activeRecording?.cancel();
       entries.clear();
       scopeStack.splice(1);
       detach();
@@ -506,6 +642,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     isPressed,
     platform,
     pushScope,
+    record,
     trigger,
   };
 }

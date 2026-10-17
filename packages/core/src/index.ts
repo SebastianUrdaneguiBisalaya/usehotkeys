@@ -18,6 +18,7 @@ export type {
   IgnoreInputs,
   KeyLayout,
   Platform,
+  RecordOptions,
   ScopeOptions,
   Unbind,
 } from "./types.js";

@@ -574,3 +574,277 @@ describe("introspection and helpers", () => {
     add.mockRestore();
   });
 });
+
+describe("sequences", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires after the steps are pressed in order", () => {
+    const handler = vi.fn();
+    make().bind("g i", handler);
+    key("g");
+    expect(handler).not.toHaveBeenCalled();
+    key("i");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[1]).toMatchObject({
+      combo: "g i",
+    });
+  });
+
+  it("does not fire when another key is pressed in between", () => {
+    const handler = vi.fn();
+    make().bind("g i", handler);
+    key("g");
+    key("x");
+    key("i");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("resets when the steps are too far apart", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make({
+      sequenceTimeout: 500,
+    }).bind("g i", handler);
+    key("g");
+    vi.advanceTimersByTime(501);
+    key("i");
+    expect(handler).not.toHaveBeenCalled();
+    key("g");
+    vi.advanceTimersByTime(100);
+    key("i");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports the same key twice and starts over after firing", () => {
+    const handler = vi.fn();
+    make().bind("g g", handler);
+    key("g");
+    key("g");
+    key("g");
+    expect(handler).toHaveBeenCalledTimes(1);
+    key("g");
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("supports steps with modifiers and ignores modifier presses between them", () => {
+    const handler = vi.fn();
+    make().bind("ctrl+k ctrl+s", handler);
+    press({
+      code: "ControlLeft",
+      ctrlKey: true,
+      key: "Control",
+    });
+    key("k", {
+      ctrlKey: true,
+    });
+    key("s", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores held-down auto-repeat", () => {
+    const handler = vi.fn();
+    make().bind("g g", handler);
+    key("g");
+    key("g", {
+      repeat: true,
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("prefers the longer sequence when a single key also matches", () => {
+    const single = vi.fn();
+    const double = vi.fn();
+    make().bind("g", single);
+    hotkeys.bind("g g", double);
+    key("g");
+    expect(single).toHaveBeenCalledTimes(1);
+    key("g");
+    expect(double).toHaveBeenCalledTimes(1);
+    expect(single).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips sequences typed inside inputs", () => {
+    const input = document.createElement("input");
+    document.body.append(input);
+    const handler = vi.fn();
+    make().bind("g i", handler);
+    key("g", {
+      target: input,
+    });
+    key("i", {
+      target: input,
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects sequences on keyup", () => {
+    make();
+    expect(() =>
+      hotkeys.bind("g i", () => {}, {
+        on: "keyup",
+      }),
+    ).toThrow(/keydown/);
+  });
+
+  it("trigger runs a sequence without disturbing real key history", () => {
+    const handler = vi.fn();
+    make().bind("g i", handler);
+    expect(hotkeys.trigger("g i")).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    key("i");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("record", () => {
+  const recordWith = (options = {}) => make().record(options);
+
+  it("resolves with the combo the user presses and normalises the main modifier to mod", async () => {
+    const promise = recordWith();
+    key("k", {
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    await expect(promise).resolves.toBe("mod+shift+k");
+  });
+
+  it("keeps explicit modifiers with mod: false", async () => {
+    const promise = recordWith({
+      mod: false,
+    });
+    key("k", {
+      ctrlKey: true,
+    });
+    await expect(promise).resolves.toBe("ctrl+k");
+  });
+
+  it("reports progress through onChange", async () => {
+    const onChange = vi.fn();
+    const promise = recordWith({
+      onChange,
+    });
+    press({
+      code: "ControlLeft",
+      ctrlKey: true,
+      key: "Control",
+    });
+    press({
+      code: "ShiftLeft",
+      ctrlKey: true,
+      key: "Shift",
+      shiftKey: true,
+    });
+    key("k", {
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    await promise;
+    expect(onChange.mock.calls.map(([combo]) => combo)).toEqual([
+      "mod",
+      "mod+shift",
+      "mod+shift+k",
+    ]);
+  });
+
+  it("cancels with escape, unless cancelKey is null", async () => {
+    const cancelled = recordWith();
+    key("Escape", {
+      code: "Escape",
+    });
+    await expect(cancelled).resolves.toBeNull();
+    const recorded = hotkeys.record({
+      cancelKey: null,
+    });
+    key("Escape", {
+      code: "Escape",
+    });
+    await expect(recorded).resolves.toBe("escape");
+  });
+
+  it("cancels through an AbortSignal and when a newer recording starts", async () => {
+    const controller = new AbortController();
+    const first = recordWith({
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(first).resolves.toBeNull();
+    const second = hotkeys.record();
+    const third = hotkeys.record();
+    await expect(second).resolves.toBeNull();
+    key("a");
+    await expect(third).resolves.toBe("a");
+  });
+
+  it("writes symbols without shift and falls back to the physical key", async () => {
+    const question = recordWith();
+    press({
+      code: "Slash",
+      key: "?",
+      shiftKey: true,
+    });
+    await expect(question).resolves.toBe("?");
+    const option = hotkeys.record();
+    press({
+      altKey: true,
+      code: "KeyA",
+      key: "å",
+    });
+    await expect(option).resolves.toBe("alt+a");
+  });
+
+  it("supports modifier-only combos when asked", async () => {
+    const promise = recordWith({
+      modifierOnly: true,
+    });
+    press({
+      code: "ShiftLeft",
+      key: "Shift",
+      shiftKey: true,
+    });
+    press(
+      {
+        code: "ShiftLeft",
+        key: "Shift",
+      },
+      "keyup",
+    );
+    await expect(promise).resolves.toBe("shift");
+  });
+
+  it("blocks bindings and the page while recording, and the result can be bound back", async () => {
+    const handler = vi.fn();
+    make().bind("mod+k", handler);
+    const promise = hotkeys.record();
+    const event = key("k", {
+      ctrlKey: true,
+    });
+    const combo = await promise;
+    expect(handler).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    hotkeys.bind(combo ?? "", handler);
+    key("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it("rejects without a DOM target", async () => {
+    const detached = createHotkeys({
+      platform: "other",
+      target: undefined,
+    });
+    const original = globalThis.document;
+    // biome-ignore lint/suspicious/noExplicitAny: simulating a server environment
+    (globalThis as any).document = undefined;
+    try {
+      await expect(detached.record()).rejects.toThrow(/DOM/);
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: restoring the environment
+      (globalThis as any).document = original;
+    }
+  });
+});

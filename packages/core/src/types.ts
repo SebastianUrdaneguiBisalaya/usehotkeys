@@ -36,7 +36,7 @@ export type HotkeyOptions = {
   scope?: string | undefined;
   /** Higher priority wins when several bindings match the same keys. Defaults to `0`. */
   priority?: number | undefined;
-  /** Event to listen to. Defaults to `"keydown"`. */
+  /** Event to listen to. Defaults to `"keydown"`. Sequences only work with `"keydown"`. */
   on?: HotkeyEventType | undefined;
   /**
    * Whether the binding is enabled. Pass a function to decide at event time.
@@ -134,6 +134,8 @@ export type HotkeysOptions = {
   platform?: Platform | undefined;
   /** Listen in the capture phase. Defaults to `false`. */
   capture?: boolean | undefined;
+  /** Milliseconds allowed between the steps of a sequence such as `"g i"`. Defaults to `1000`. */
+  sequenceTimeout?: number | undefined;
   /** Defaults applied to every binding of this instance. */
   defaults?: HotkeyOptions | undefined;
   /** Called when a new binding conflicts with an existing one. */
@@ -142,10 +144,28 @@ export type HotkeysOptions = {
   debug?: boolean | undefined;
 };
 
+/** Options for {@link Hotkeys.record}. */
+export type RecordOptions = {
+  /** Called as the user presses keys, e.g. `"ctrl"`, then `"ctrl+shift"`, then `"ctrl+shift+k"`. */
+  onChange?: ((combo: string) => void) | undefined;
+  /**
+   * Key (pressed alone) that cancels the recording and resolves with `null`.
+   * Defaults to `"escape"`. Use `null` if `escape` itself must be recordable.
+   */
+  cancelKey?: string | null | undefined;
+  /** Write the platform's main modifier as `mod` (`Cmd` on macOS, `Ctrl` elsewhere). Defaults to `true`. */
+  mod?: boolean | undefined;
+  /** Also accept a combo made only of modifiers (e.g. `"shift"`), recorded when they are released. Defaults to `false`. */
+  modifierOnly?: boolean | undefined;
+  /** Abort the recording; it resolves with `null`. */
+  signal?: AbortSignal | undefined;
+};
+
 /** A keyboard-shortcut engine. Create one with {@link createHotkeys}. */
 export type Hotkeys = {
   /**
-   * Registers `handler` for one or more combos (`"mod+k"`, `["ctrl+s", "meta+s"]`).
+   * Registers `handler` for one or more combos (`"mod+k"`, `["ctrl+s", "meta+s"]`) or sequences
+   * (`"g i"`: press `g`, then `i`).
    * Returns a function that removes the binding.
    *
    * @throws {HotkeyParseError} when a combo is invalid.
@@ -170,6 +190,14 @@ export type Hotkeys = {
   getConflicts: () => HotkeyConflict[];
   /** `true` while the key (`"shift"`, `"a"`, `"escape"`…) is held down. */
   isPressed: (key: string) => boolean;
+  /**
+   * Listens for the next key combination the user presses and resolves with it as a string you can
+   * pass to `bind` (e.g. `"mod+shift+k"`), or `null` if it is cancelled. While recording, no
+   * binding fires and the keys do not reach the page. Starting a new recording cancels the previous one.
+   *
+   * @throws {HotkeysEnvironmentError} (as a rejection) when there is no DOM to listen on.
+   */
+  record: (options?: RecordOptions) => Promise<string | null>;
   /** Platform used for `mod` and formatting. */
   platform: Platform;
   /** Removes every binding and listener. */
