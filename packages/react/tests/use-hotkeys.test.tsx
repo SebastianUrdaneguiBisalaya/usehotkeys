@@ -2,7 +2,12 @@ import { act, cleanup, render } from "@testing-library/react";
 import { createHotkeys } from "@usehotkeys/core";
 import { StrictMode, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HotkeysProvider, useHotkeyScope, useHotkeys } from "../src/index.js";
+import {
+  HotkeysProvider,
+  useHotkeyScope,
+  useHotkeys,
+  useRecordHotkey,
+} from "../src/index.js";
 
 afterEach(cleanup);
 
@@ -178,5 +183,74 @@ describe("HotkeysProvider", () => {
     expect(custom.getBindings()).toHaveLength(1);
     press("k");
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sequences", () => {
+  it("accepts sequence strings", () => {
+    const handler = vi.fn();
+    const Component = () => {
+      useHotkeys("g i", handler);
+      return null;
+    };
+    render(<Component />);
+    press("g");
+    press("i");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useRecordHotkey", () => {
+  const Recorder = () => {
+    const { combo, isRecording, preview, start } = useRecordHotkey();
+    return (
+      <button
+        onClick={() => void start()}
+        type="button"
+      >
+        {isRecording ? `recording:${preview}` : `combo:${combo ?? "none"}`}
+      </button>
+    );
+  };
+
+  it("records a combo and exposes progress", async () => {
+    const { getByRole } = render(<Recorder />);
+    const button = getByRole("button");
+    expect(button.textContent).toBe("combo:none");
+    act(() => button.click());
+    expect(button.textContent).toBe("recording:");
+    press("Control", {
+      code: "ControlLeft",
+      ctrlKey: true,
+    });
+    expect(button.textContent).toBe("recording:mod");
+    await act(async () => {
+      press("k", {
+        ctrlKey: true,
+      });
+    });
+    expect(button.textContent).toBe("combo:mod+k");
+  });
+
+  it("keeps the previous combo when cancelled and stops on unmount", async () => {
+    const { getByRole, unmount } = render(<Recorder />);
+    const button = getByRole("button");
+    act(() => button.click());
+    await act(async () => {
+      press("Escape", {
+        code: "Escape",
+      });
+    });
+    expect(button.textContent).toBe("combo:none");
+    act(() => button.click());
+    unmount();
+    const handler = vi.fn();
+    const probe = createHotkeys({
+      target: document,
+    });
+    probe.bind("k", handler);
+    press("k");
+    expect(handler).toHaveBeenCalledTimes(1);
+    probe.destroy();
   });
 });
