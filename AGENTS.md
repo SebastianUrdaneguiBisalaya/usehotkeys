@@ -163,6 +163,19 @@ pnpm-workspace.yaml
 
 ---
 
+# Project context: usehotkeys
+
+This repository is **usehotkeys**, a framework-agnostic keyboard-shortcut engine (`@usehotkeys/core`) with React bindings (`@usehotkeys/react`). It is the concrete instance of this template, so the "Project context template" section below is kept only as generic reference and **does not apply** where it conflicts with this section.
+
+- **Target environment: client-side (browser).** This is not an API-wrapping SDK. There are no secret keys, no HTTP client and no `Client` resources. Section 6's secret-key/server-side-only rules and the `typeof window` guard do **not** apply. The inverse rule applies: importing either package, or creating an engine, must have no side effects on the server (no `window`/`document` access at import time or in `createHotkeys`; listeners attach lazily on the first `bind`).
+- **Packages:** `packages/core` (zero dependencies, no framework) and `packages/react` (peer-depends on `@usehotkeys/core` and `react`). There is no `apps/website`; all documentation lives in the READMEs (root, `packages/core`, `packages/react`) and must stay understandable to both junior and senior developers. Update the README whenever an option or public export changes.
+- **Public API = `src/index.ts` of each package.** Entry point is the `createHotkeys()` factory; no classes except the error types in `errors.ts` (needed for `instanceof`).
+- **Design rules to preserve:** exact modifiers by default; `mod` resolves per platform; only the highest-ranked matching binding fires (priority, then scope depth, then most recent) unless `passthrough`; `bind` always returns an idempotent unbind; `ignoreInputs: "auto"` skips editable elements except for `ctrl`/`meta` combos; no `console` output except under `debug` or an explicit `onConflict`.
+- **Tests** (`tests/`, vitest + jsdom) must cover any change to matching, scopes, priorities or `ignoreInputs`. React tests resolve `@usehotkeys/core` to `../core/src` via a vitest alias and a tsconfig path, so they do not need a build first.
+- **Roadmap (not implemented):** key sequences (`"g g"`), a shortcut recorder (`recordHotkey`), `useIsPressed`, `doubleTap`/`hold`. Combos containing spaces currently throw `HotkeyParseError`.
+
+---
+
 # Project context template: SDK for a third-party API
 
 This section is a checklist to fill in (and rename) once this template is used to build an SDK for a specific third-party HTTP API — e.g. "Project context: Node.js SDK for `<Provider>`". Replace `<Provider>` and `Client` below with the actual API/service and the client class name you choose. If the resulting SDK isn't payments-related, adjust "Security" to match the actual sensitivity of the credentials/data involved — the server-side-only enforcement in section 6 still applies to any secret key, not just payment ones.

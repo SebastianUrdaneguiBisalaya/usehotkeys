@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing! This project is a Node.js SDK template written in TypeScript. Please read this guide before opening a pull request.
+Thanks for your interest in contributing! This project is a TypeScript keyboard-shortcut library (a pnpm workspace with `@usehotkeys/core` and `@usehotkeys/react`). Please read this guide before opening a pull request.
 
 ## Code of conduct
 
