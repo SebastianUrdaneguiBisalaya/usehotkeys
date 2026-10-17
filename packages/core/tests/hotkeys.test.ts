@@ -655,16 +655,102 @@ describe("sequences", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("prefers the longer sequence when a single key also matches", () => {
+  it("fires a single key immediately when no longer sequence starts with it", () => {
     const single = vi.fn();
-    const double = vi.fn();
     make().bind("g", single);
-    hotkeys.bind("g g", double);
+    hotkeys.bind("h h", vi.fn());
     key("g");
     expect(single).toHaveBeenCalledTimes(1);
-    key("g");
-    expect(double).toHaveBeenCalledTimes(1);
-    expect(single).toHaveBeenCalledTimes(1);
+  });
+
+  describe("when a key is also the start of a longer sequence (like Vim)", () => {
+    it("waits, then fires the short binding if nothing follows", () => {
+      vi.useFakeTimers();
+      const single = vi.fn();
+      const double = vi.fn();
+      make({
+        sequenceTimeout: 400,
+      }).bind("g", single);
+      hotkeys.bind("g g", double);
+      key("g");
+      expect(single).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(399);
+      expect(single).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(single).toHaveBeenCalledTimes(1);
+      expect(double).not.toHaveBeenCalled();
+    });
+
+    it("fires only the longer one when the sequence is completed", () => {
+      vi.useFakeTimers();
+      const single = vi.fn();
+      const double = vi.fn();
+      make().bind("g", single);
+      hotkeys.bind("g g", double);
+      key("g");
+      key("g");
+      vi.advanceTimersByTime(5000);
+      expect(double).toHaveBeenCalledTimes(1);
+      expect(single).not.toHaveBeenCalled();
+    });
+
+    it("fires the short one right away when a different key breaks the wait", () => {
+      vi.useFakeTimers();
+      const calls: string[] = [];
+      make().bind("g", () => calls.push("g"));
+      hotkeys.bind("g g", () => calls.push("g g"));
+      hotkeys.bind("x", () => calls.push("x"));
+      key("g");
+      key("x");
+      expect(calls).toEqual([
+        "g",
+        "x",
+      ]);
+      vi.advanceTimersByTime(5000);
+      expect(calls).toEqual([
+        "g",
+        "x",
+      ]);
+    });
+
+    it("cancels the default action immediately, not after the wait", () => {
+      vi.useFakeTimers();
+      make().bind("g", () => {});
+      hotkeys.bind("g g", () => {});
+      expect(key("g").defaultPrevented).toBe(true);
+    });
+
+    it("does not fire if the binding is removed while waiting", () => {
+      vi.useFakeTimers();
+      const single = vi.fn();
+      const unbind = make().bind("g", single);
+      hotkeys.bind("g g", () => {});
+      key("g");
+      unbind();
+      vi.advanceTimersByTime(5000);
+      expect(single).not.toHaveBeenCalled();
+    });
+
+    it("does not wait for sequences that are disabled or in an inactive scope", () => {
+      const single = vi.fn();
+      make().bind("g", single);
+      hotkeys.bind("g g", () => {}, {
+        scope: "other",
+      });
+      hotkeys.bind("g h", () => {}, {
+        enabled: false,
+      });
+      key("g");
+      expect(single).toHaveBeenCalledTimes(1);
+    });
+
+    it("trigger runs the short binding without waiting", () => {
+      const single = vi.fn();
+      make().bind("g", single);
+      hotkeys.bind("g g", () => {});
+      expect(hotkeys.trigger("g")).toBe(true);
+      expect(single).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("skips sequences typed inside inputs", () => {
@@ -846,5 +932,241 @@ describe("record", () => {
       // biome-ignore lint/suspicious/noExplicitAny: restoring the environment
       (globalThis as any).document = original;
     }
+  });
+});
+
+describe("subscribe", () => {
+  it("notifies on bind, unbind, scope changes and notify, and reuses the snapshot until then", () => {
+    make();
+    const listener = vi.fn();
+    const stop = hotkeys.subscribe(listener);
+    const first = hotkeys.getBindings();
+    expect(hotkeys.getBindings()).toBe(first);
+
+    const unbind = hotkeys.bind("k", () => {});
+    expect(listener).toHaveBeenCalledTimes(1);
+    const second = hotkeys.getBindings();
+    expect(second).not.toBe(first);
+    expect(hotkeys.getBindings()).toBe(second);
+
+    const pop = hotkeys.pushScope("panel");
+    pop();
+    expect(listener).toHaveBeenCalledTimes(3);
+    unbind();
+    expect(listener).toHaveBeenCalledTimes(4);
+    hotkeys.notify();
+    expect(listener).toHaveBeenCalledTimes(5);
+
+    stop();
+    hotkeys.notify();
+    expect(listener).toHaveBeenCalledTimes(5);
+  });
+
+  it("notifies when a once binding removes itself", () => {
+    make().bind("k", () => {}, {
+      once: true,
+    });
+    const listener = vi.fn();
+    hotkeys.subscribe(listener);
+    key("k");
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(hotkeys.getBindings()).toEqual([]);
+  });
+});
+
+describe("keymap", () => {
+  const keymap = {
+    open: {
+      description: "Opens the palette",
+      group: "Navigation",
+      keys: "mod+k",
+      label: "Open palette",
+    },
+    save: "mod+s",
+    sequence: [
+      "g i",
+    ],
+  };
+
+  it("binds an action to its default keys and inherits metadata", () => {
+    const handler = vi.fn();
+    make({
+      keymap,
+    }).bindAction("open", handler);
+    key("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(hotkeys.getBindings()[0]).toMatchObject({
+      action: "open",
+      combos: [
+        "mod+k",
+      ],
+      group: "Navigation",
+      label: "Open palette",
+    });
+  });
+
+  it("lets bind options override the keymap metadata", () => {
+    make({
+      keymap,
+    }).bindAction("open", () => {}, {
+      label: "Palette",
+    });
+    expect(hotkeys.getBindings()[0]?.label).toBe("Palette");
+  });
+
+  it("follows setShortcut without re-binding, and resets with null", () => {
+    const handler = vi.fn();
+    make({
+      keymap,
+    }).bindAction("open", handler);
+    hotkeys.setShortcut("open", "mod+p");
+    key("k", {
+      ctrlKey: true,
+    });
+    expect(handler).not.toHaveBeenCalled();
+    key("p", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    hotkeys.setShortcut("open", null);
+    key("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes a shortcut with an empty array", () => {
+    const handler = vi.fn();
+    make({
+      keymap,
+    }).bindAction("save", handler);
+    hotkeys.setShortcut("save", []);
+    key("s", {
+      ctrlKey: true,
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(
+      hotkeys.getShortcuts().find((shortcut) => shortcut.action === "save"),
+    ).toMatchObject({
+      customized: true,
+      keys: [],
+    });
+  });
+
+  it("applies saved overrides and exposes them for saving", () => {
+    const handler = vi.fn();
+    make({
+      keymap,
+      overrides: {
+        open: "mod+p",
+      },
+    }).bindAction("open", handler);
+    key("p", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(hotkeys.getOverrides()).toEqual({
+      open: [
+        "mod+p",
+      ],
+    });
+    hotkeys.setShortcut("open", null);
+    expect(hotkeys.getOverrides()).toEqual({});
+  });
+
+  it("describes every action for a settings screen and notifies on change", () => {
+    make({
+      keymap,
+    });
+    const listener = vi.fn();
+    hotkeys.subscribe(listener);
+    const before = hotkeys.getShortcuts();
+    expect(before).toEqual([
+      expect.objectContaining({
+        action: "open",
+        customized: false,
+        defaultKeys: [
+          "mod+k",
+        ],
+        keys: [
+          "mod+k",
+        ],
+        label: "Open palette",
+      }),
+      expect.objectContaining({
+        action: "save",
+        keys: [
+          "mod+s",
+        ],
+      }),
+      expect.objectContaining({
+        action: "sequence",
+        keys: [
+          "g i",
+        ],
+      }),
+    ]);
+    hotkeys.setShortcut("save", "mod+shift+s");
+    expect(listener).toHaveBeenCalled();
+    expect(hotkeys.getShortcuts()).not.toBe(before);
+    expect(hotkeys.getShortcuts()[1]).toMatchObject({
+      customized: true,
+      keys: [
+        "mod+shift+s",
+      ],
+    });
+  });
+
+  it("reports conflicts created by a new shortcut", () => {
+    const onConflict = vi.fn();
+    make({
+      keymap,
+      onConflict,
+    });
+    hotkeys.bindAction("open", () => {});
+    hotkeys.bindAction("save", () => {});
+    expect(onConflict).not.toHaveBeenCalled();
+    hotkeys.setShortcut("save", "mod+k");
+    expect(onConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates eagerly and with typed errors", () => {
+    expect(() =>
+      createHotkeys({
+        keymap: {
+          bad: "ctrl+",
+        },
+      }),
+    ).toThrow(/Invalid hotkey/);
+    expect(() =>
+      createHotkeys({
+        keymap,
+        overrides: {
+          nope: "k",
+        },
+      }),
+    ).toThrow(/Unknown action "nope"/);
+    make({
+      keymap,
+    });
+    expect(() => hotkeys.bindAction("nope", () => {})).toThrow(
+      /Unknown action/,
+    );
+    expect(() => hotkeys.setShortcut("nope", "k")).toThrow(/Unknown action/);
+    expect(() => hotkeys.setShortcut("open", "ctrl+")).toThrow(
+      /Invalid hotkey/,
+    );
+  });
+
+  it("refuses a sequence for an action bound on keyup, without changing anything", () => {
+    make({
+      keymap,
+    }).bindAction("open", () => {}, {
+      on: "keyup",
+    });
+    expect(() => hotkeys.setShortcut("open", "g i")).toThrow(/keydown/);
+    expect(hotkeys.getOverrides()).toEqual({});
   });
 });

@@ -95,7 +95,9 @@ export type Unbind = () => void;
 /** Read-only description of a registered binding. */
 export type BindingInfo = {
   id: number;
-  /** Combos exactly as written in `bind`. */
+  /** The action id when the binding was created with `bindAction`. */
+  action?: string;
+  /** Combos exactly as written in `bind` (or as currently assigned to the action). */
   combos: string[];
   scope: string;
   priority: number;
@@ -126,6 +128,37 @@ export type ScopeOptions = {
   inherit?: boolean | undefined;
 };
 
+/** A named action in the keymap, with its default keys and optional help-screen metadata. */
+export type KeymapDefinition = {
+  /** Default combo(s), e.g. `"mod+k"` or `["j", "arrowdown"]`. An empty array means "no shortcut". */
+  keys: string | readonly string[];
+  /** Human-readable name, inherited by bindings of this action. */
+  label?: string | undefined;
+  /** Longer description, inherited by bindings of this action. */
+  description?: string | undefined;
+  /** Category, inherited by bindings of this action. */
+  group?: string | undefined;
+};
+
+/** One keymap entry: just the keys, or keys plus metadata. */
+export type KeymapEntry = string | readonly string[] | KeymapDefinition;
+
+/** Action ids mapped to their default shortcuts: `{ openPalette: "mod+k" }`. */
+export type Keymap = Record<string, KeymapEntry>;
+
+/** An action's current shortcut, for settings screens. */
+export type ShortcutInfo = {
+  action: string;
+  /** The keys in effect: the user's override, or the defaults. */
+  keys: string[];
+  defaultKeys: string[];
+  /** `true` when the user changed the shortcut from its default. */
+  customized: boolean;
+  label?: string;
+  description?: string;
+  group?: string;
+};
+
 /** Options for {@link createHotkeys}. */
 export type HotkeysOptions = {
   /** Where to listen for keyboard events. Defaults to `document` (nothing happens on the server). */
@@ -136,6 +169,10 @@ export type HotkeysOptions = {
   capture?: boolean | undefined;
   /** Milliseconds allowed between the steps of a sequence such as `"g i"`. Defaults to `1000`. */
   sequenceTimeout?: number | undefined;
+  /** Named actions with default shortcuts, for `bindAction`. Lets users customise shortcuts. */
+  keymap?: Keymap | undefined;
+  /** The user's saved customisations, `{ action: keys }`, applied on top of the keymap. */
+  overrides?: Record<string, string | readonly string[]> | undefined;
   /** Defaults applied to every binding of this instance. */
   defaults?: HotkeyOptions | undefined;
   /** Called when a new binding conflicts with an existing one. */
@@ -184,8 +221,48 @@ export type Hotkeys = {
   pushScope: (name: string, options?: ScopeOptions) => Unbind;
   /** Names of the scopes that are currently active, top of the stack first. */
   getActiveScopes: () => string[];
-  /** Every registered binding, e.g. to render a shortcut cheat sheet. */
-  getBindings: () => BindingInfo[];
+  /**
+   * Registers `handler` for a named action of the keymap. The keys come from the keymap (or the
+   * user's override) and follow `setShortcut` changes automatically.
+   *
+   * @throws {UnknownActionError} when the action is not in the keymap.
+   */
+  bindAction: (
+    action: string,
+    handler: HotkeyHandler,
+    options?: HotkeyOptions,
+  ) => Unbind;
+  /**
+   * Changes the shortcut of an action. Pass `null` to go back to the default and `[]` to remove
+   * the shortcut. Bindings of the action pick up the change immediately.
+   *
+   * @throws {UnknownActionError} when the action is not in the keymap.
+   * @throws {HotkeyParseError} when a combo is invalid.
+   */
+  setShortcut: (
+    action: string,
+    keys: string | readonly string[] | null,
+  ) => void;
+  /** Every action of the keymap with its current keys, e.g. for a settings screen. */
+  getShortcuts: () => readonly ShortcutInfo[];
+  /** The user's customisations, ready to save (e.g. to `localStorage`) and pass back as `overrides`. */
+  getOverrides: () => Record<string, string[]>;
+  /**
+   * Calls `listener` whenever the bindings, scopes or shortcuts change. Returns a function that
+   * stops listening. Use it with `getBindings()`/`getShortcuts()`, which return the same array
+   * until something changes.
+   */
+  subscribe: (listener: () => void) => Unbind;
+  /**
+   * Tells subscribers to re-read the state. Call it when something an `enabled` function depends
+   * on has changed, since the engine cannot see that by itself.
+   */
+  notify: () => void;
+  /**
+   * Every registered binding, e.g. to render a shortcut cheat sheet. The same array is returned
+   * until something changes (see {@link Hotkeys.subscribe}).
+   */
+  getBindings: () => readonly BindingInfo[];
   /** Groups of bindings that compete for the same keys. */
   getConflicts: () => HotkeyConflict[];
   /** `true` while the key (`"shift"`, `"a"`, `"escape"`…) is held down. */
