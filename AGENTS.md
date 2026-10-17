@@ -73,7 +73,7 @@ This is achieved by:
 
 ### CI publish flow (`.github/workflows/publish.yml`)
 
-- **Trigger**: a GitHub Release being published (`release: types: [published]`). Merging to `main` does **not** publish anything by itself — publishing is a separate, deliberate step: bump `version` in `package.json` (following semver, see section 4), merge that to `main`, then create a GitHub Release (tag matching the new version is recommended, e.g. `v1.2.0`) to trigger the actual npm publish.
+- **Trigger**: every push to `main` (`push: branches: [main]`), i.e. merging a pull request. The version guard below makes this safe: a push that does not bump a package's `version` publishes nothing. To release, bump `version` in that package's `package.json` (following semver, see section 4) in the pull request and merge it. Pull requests run `.github/workflows/ci.yml` (lint, typecheck, test, build, plus a React 18 compatibility job) before they can be merged.
 - **Gate**: `typecheck` → `lint` → `test` → `build` must all pass before publishing is attempted.
 - **Version guard**: before publishing, the workflow checks `npm view <name>@<version>` against the current `package.json` version and skips the publish step if that version is already on the registry — a safety net in case a release is edited/republished without a version bump.
 - **Required GitHub secret**: `NPM_TOKEN`.
@@ -122,7 +122,7 @@ This is achieved by:
 
 ## 7. Local development workflow
 
-The exact sequence of commands — for a human contributor or an AI agent — to run after making a source change, how to try the built package locally, and what to run before opening a pull request now lives in the **"Development"** section of [README.md](./README.md). Follow that instead of duplicating it here; update it there if the workflow changes.
+The exact sequence of commands — for a human contributor or an AI agent — to run after making a source change, how to try the built package locally, and what to run before opening a pull request now lives in the **"Development workflow"** section of [CONTRIBUTING.md](./CONTRIBUTING.md#development-workflow). Follow that instead of duplicating it here; update it there if the workflow changes.
 
 ## 8. Target environment: server, client, or both
 
@@ -172,7 +172,8 @@ This repository is **usehotkeys**, a framework-agnostic keyboard-shortcut engine
 - **Public API = `src/index.ts` of each package.** Entry point is the `createHotkeys()` factory; no classes except the error types in `errors.ts` (needed for `instanceof`).
 - **Design rules to preserve:** exact modifiers by default; `mod` resolves per platform; only the highest-ranked matching binding fires (priority, then scope depth, then most recent) unless `passthrough`; `bind` always returns an idempotent unbind; `ignoreInputs: "auto"` skips editable elements except for `ctrl`/`meta` combos; no `console` output except under `debug` or an explicit `onConflict`.
 - **Tests** (`tests/`, vitest + jsdom) must cover any change to matching, scopes, priorities or `ignoreInputs`. React tests resolve `@usehotkeys/core` to `../core/src` via a vitest alias and a tsconfig path, so they do not need a build first.
-- **Roadmap (not implemented):** key sequences (`"g g"`), a shortcut recorder (`recordHotkey`), `useIsPressed`, `doubleTap`/`hold`. Combos containing spaces currently throw `HotkeyParseError`.
+- **Implemented beyond the basics:** key sequences (`"g i"`, space-separated steps, `sequenceTimeout`) and `hotkeys.record()` / `useRecordHotkey`. A single combo is a sequence of one step internally (`parseSequence`).
+- **Roadmap (not implemented):** `useIsPressed`, `doubleTap`/`hold`.
 
 ---
 

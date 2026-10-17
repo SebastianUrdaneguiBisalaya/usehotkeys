@@ -61,5 +61,5 @@
     "typescript": "5.7.3",
     "vitest": "4.1.11"
   },
-  "private": true
+  "private": false
 }

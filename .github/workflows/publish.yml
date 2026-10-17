@@ -1,8 +1,13 @@
 name: Publish to npm
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+
+# Never cancel a publish that is already running; queue the next one instead.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -19,7 +24,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11.1.1
+          version: 12.3.4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
