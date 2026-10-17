@@ -42,20 +42,16 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: Check if this version is already published
-        id: version-check
+      - name: Publish packages whose version is not on npm yet
         run: |
-          PKG_NAME=$(node -p "require('./packages/core/package.json').name")
-          PKG_VERSION=$(node -p "require('./packages/core/package.json').version")
-          if npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish to npm
-        if: steps.version-check.outputs.published == 'false'
-        working-directory: packages/core
-        run: pnpm publish --access public --no-git-checks --provenance
+          for dir in packages/core packages/react; do
+            PKG_NAME=$(node -p "require('./$dir/package.json').name")
+            PKG_VERSION=$(node -p "require('./$dir/package.json').version")
+            if npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1; then
+              echo "$PKG_NAME@$PKG_VERSION is already published, skipping."
+            else
+              (cd "$dir" && pnpm publish --access public --no-git-checks --provenance)
+            fi
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
