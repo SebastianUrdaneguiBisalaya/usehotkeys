@@ -9,6 +9,7 @@ import {
   useHotkeyScope,
   useHotkeys,
   useHotkeysInstance,
+  useIsPressed,
   useRecordHotkey,
   useShortcuts,
 } from "../src/index.js";
@@ -416,5 +417,89 @@ describe("keymap hooks", () => {
       ctrlKey: true,
     });
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useIsPressed", () => {
+  const Probe = ({ combo }: { combo: string }) => (
+    <p data-testid="state">{String(useIsPressed(combo))}</p>
+  );
+
+  it("follows the keys being held, with no bindings registered", () => {
+    const { getByTestId } = render(
+      <HotkeysProvider
+        options={{
+          platform: "other",
+        }}
+      >
+        <Probe combo="shift" />
+      </HotkeysProvider>,
+    );
+    expect(getByTestId("state").textContent).toBe("false");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          code: "ShiftLeft",
+          key: "Shift",
+          shiftKey: true,
+        }),
+      );
+    });
+    expect(getByTestId("state").textContent).toBe("true");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          bubbles: true,
+          code: "ShiftLeft",
+          key: "Shift",
+        }),
+      );
+    });
+    expect(getByTestId("state").textContent).toBe("false");
+  });
+
+  it("supports combos and stops listening on unmount", () => {
+    const engine = createHotkeys({
+      platform: "other",
+    });
+    const { getByTestId, unmount } = render(
+      <HotkeysProvider hotkeys={engine}>
+        <Probe combo="mod+k" />
+      </HotkeysProvider>,
+    );
+    press("Control", {
+      code: "ControlLeft",
+      ctrlKey: true,
+    });
+    expect(getByTestId("state").textContent).toBe("false");
+    press("k", {
+      ctrlKey: true,
+    });
+    expect(getByTestId("state").textContent).toBe("true");
+    const remove = vi.spyOn(document, "removeEventListener");
+    unmount();
+    expect(remove).toHaveBeenCalledWith("keydown", expect.any(Function), false);
+    remove.mockRestore();
+  });
+});
+
+describe("hold and double tap through the hook", () => {
+  it("passes hold to the engine", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    const Component = () => {
+      useHotkeys("k", handler, {
+        hold: 300,
+      });
+      return null;
+    };
+    render(<Component />);
+    press("k");
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

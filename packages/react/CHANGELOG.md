@@ -12,6 +12,7 @@ First release. Requires `@usehotkeys/core` 0.1.0 and React 18 or later.
 
 - `useHotkeys` (combos and sequences), `useHotkeyAction` (named actions from the keymap) and `useHotkeyScope`.
 - `useBindings` and `useShortcuts`, always up to date through `useSyncExternalStore`.
+- `useIsPressed` re-renders while a key or combo is held; `hold` is available in every binding hook.
 - `useRecordHotkey` for "customize your shortcuts" screens.
 - `HotkeysProvider` and `useHotkeysInstance`; hooks work without a provider through a shared engine.
 - Latest-handler semantics: no stale closures, no re-registration on re-render.

@@ -52,6 +52,7 @@ export function useRegister(
     element,
     exact,
     group,
+    hold,
     label,
     layout,
     on,
@@ -90,6 +91,7 @@ export function useRegister(
       },
       exact,
       group,
+      hold,
       ignoreInputs:
         typeof ignoreInputs === "function"
           ? (event) => {
@@ -120,6 +122,7 @@ export function useRegister(
     element,
     exact,
     group,
+    hold,
     ignoreInputsDep,
     label,
     layout,
