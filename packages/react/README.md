@@ -16,12 +16,13 @@ pnpm add -E @usehotkeys/react @usehotkeys/core
 4. [`useHotkeyScope`](#usehotkeyscope)
 5. [`useBindings`](#usebindings) and [`useShortcuts`](#useshortcuts)
 6. [`useRecordHotkey`](#userecordhotkey)
-7. [`HotkeysProvider`](#hotkeysprovider)
-8. [Recipes](#recipes)
-9. [Next.js and server rendering](#nextjs-and-server-rendering)
-10. [Compatibility](#compatibility)
-11. [How it works](#how-it-works)
-12. [FAQ](#faq)
+7. [`useIsPressed`](#useispressed)
+8. [`HotkeysProvider`](#hotkeysprovider)
+9. [Recipes](#recipes)
+10. [Next.js and server rendering](#nextjs-and-server-rendering)
+11. [Compatibility](#compatibility)
+12. [How it works](#how-it-works)
+13. [FAQ](#faq)
 
 ## Quick start
 
@@ -220,6 +221,23 @@ function ShortcutField({ value, onChange }: { value: string; onChange: (combo: s
 
 Recording stops by itself if the component unmounts.
 
+## `useIsPressed`
+
+```ts
+const shiftHeld = useIsPressed("shift");
+```
+
+`true` while the user is holding the combo, and re-renders when that changes. The argument can be a key (`"shift"`, `"a"`) or a combination (`"ctrl+shift"`, `"mod+k"`). It is `false` on the server and while hydrating, and an invalid combo throws `HotkeyParseError`.
+
+```tsx
+function Row({ item }: { item: Item }) {
+  const selecting = useIsPressed("shift"); // show checkboxes while Shift is held
+  return <li>{selecting && <input type="checkbox" />} {item.name}</li>;
+}
+```
+
+It reads the same pressed-key state as `hotkeys.isPressed`, which resets on window blur, tab hiding and `Cmd` release, so it never gets stuck. Use `useHotkeys` with `hold` or a modifier tap if you want to *run* something instead of showing a state.
+
 ## `HotkeysProvider`
 
 **Optional.** Without it, every hook shares one global engine, which is what you want in most apps. Add a provider when you need to configure the engine or isolate a part of the tree:
@@ -331,13 +349,14 @@ useHotkeys("enter", dismissBanner, { once: true });
 - **React** 18 and 19 (CI runs the tests against both), with StrictMode and concurrent rendering.
 - **Peer dependencies:** `react` and `@usehotkeys/core`.
 - **Formats:** ESM and CommonJS with types; `"use client"` included for Next.js.
-- **Size:** about 1.3 KB minified + gzipped, on top of the core (about 6 KB). Browser support is the same as the core's: see [Compatibility and size](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#compatibility-and-size).
+- **Size:** about 1.4 KB minified + gzipped, on top of the core (about 6.7 KB). Browser support is the same as the core's: see [Compatibility and size](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#compatibility-and-size).
 
 ## How it works
 
 - `useHotkeys` stores the latest `handler` and options in a ref and runs one `useEffect` that calls `hotkeys.bind(...)` and returns the unbind function. The effect depends on the combo and the static options only, so it is StrictMode-safe (mount, unmount, mount again leaves exactly one binding).
 - `useHotkeyAction` shares its implementation with `useHotkeys` and calls `hotkeys.bindAction`, so changing a shortcut never re-registers.
 - `useBindings` and `useShortcuts` use `useSyncExternalStore` with the engine's `subscribe` and its cached snapshots; they re-render only when something changed.
+- `useIsPressed` subscribes to the engine's pressed-key state with `useSyncExternalStore`, so it re-renders only when the answer for its combo changes.
 - `useHotkeyScope` runs `hotkeys.pushScope(...)` in an effect and returns its disposer.
 - The engine is created lazily on first use (or by `HotkeysProvider`), and attaches DOM listeners only while at least one binding exists.
 - Source is three small files in `src/`: `context.tsx`, `use-hotkeys.ts`, `use-hotkey-scope.ts`.
