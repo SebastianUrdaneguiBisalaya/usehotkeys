@@ -52,7 +52,9 @@ jobs:
           for dir in packages/core packages/react; do
             PKG_NAME=$(node -p "require('./$dir/package.json').name")
             PKG_VERSION=$(node -p "require('./$dir/package.json').version")
-            if npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1; then
+            # Query the registry from outside the repo: inside it, npm refuses to run because
+            # devEngines.packageManager asks for pnpm, and the check would always look "unpublished".
+            if (cd "$RUNNER_TEMP" && npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1); then
               echo "$PKG_NAME@$PKG_VERSION is already published, skipping."
             else
               (cd "$dir" && pnpm publish --access public --no-git-checks --provenance)
