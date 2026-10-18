@@ -9,13 +9,13 @@ import {
   codeToName,
   nameToCode,
   nameToEventKey,
-  normalizeComboKey,
   normalizeEventKey,
 } from "./keys.js";
 import { matchesEvent } from "./matcher.js";
 import {
   type ParsedCombo,
   type ParsedSequence,
+  parseCombo,
   parseSequence,
 } from "./parser.js";
 import { type Recording, startRecording } from "./record.js";
@@ -38,6 +38,7 @@ import type {
 const GLOBAL_SCOPE = "global";
 const ALL_SCOPES = "*";
 const DEFAULT_SEQUENCE_TIMEOUT = 1000;
+const DEFAULT_TAP_TIMEOUT = 300;
 const MAX_HISTORY = 8;
 
 type Entry = {
@@ -48,6 +49,7 @@ type Entry = {
   scope: string;
   priority: number;
   on: "keydown" | "keyup";
+  hold: number | undefined;
   enabled: boolean | (() => boolean);
   once: boolean;
   repeat: boolean;
@@ -75,9 +77,11 @@ type Candidate = {
   depth: number;
 };
 
+/** A key press kept for sequence matching. `tap` is set when a modifier was pressed and released alone. */
 type HistoryItem = {
   event: KeyboardEvent;
   time: number;
+  tap?: string;
 };
 
 /** A match that is waiting to see whether a longer sequence continues (like Vim's `timeoutlen`). */
@@ -85,6 +89,13 @@ type Pending = {
   candidates: Candidate[];
   event: KeyboardEvent;
   length: number;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+/** A long-press binding whose key is currently down and whose timer is running. */
+type Hold = {
+  keyId: string;
+  modifiers: string[];
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -101,6 +112,8 @@ const MODIFIER_KEYS = new Set([
 
 const isModifierEvent = (event: KeyboardEvent) =>
   MODIFIER_KEYS.has(normalizeEventKey(event.key ?? ""));
+
+const keyIdOf = (event: KeyboardEvent) => event.code || event.key;
 
 const toList = (keys: string | readonly string[]): string[] =>
   typeof keys === "string"
@@ -130,6 +143,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
   const capture = options.capture ?? false;
   const defaults = options.defaults ?? {};
   const sequenceTimeout = options.sequenceTimeout ?? DEFAULT_SEQUENCE_TIMEOUT;
+  const tapTimeout = options.tapTimeout ?? DEFAULT_TAP_TIMEOUT;
 
   const entries = new Map<number, Entry>();
   const scopeStack: ScopeFrame[] = [
@@ -140,7 +154,16 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     },
   ];
   const pressed = new Map<string, string>();
-  /** Recent non-modifier key presses, used to match sequences such as "g i". */
+  /** Modifiers currently down: when they went down, and whether another key was pressed meanwhile. */
+  const heldModifiers = new Map<
+    string,
+    {
+      time: number;
+      used: boolean;
+    }
+  >();
+  const holds = new Map<number, Hold>();
+  /** Recent key presses (and modifier taps), used to match sequences such as "g i" or "shift shift". */
   let history: HistoryItem[] = [];
   let pending: Pending | undefined;
   let nextEntryId = 1;
@@ -156,6 +179,16 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     version++;
     for (const listener of [
       ...listeners,
+    ]) {
+      listener();
+    }
+  };
+
+  // Pressed keys change on every key event, so they notify separately from `changed`.
+  const pressedListeners = new Set<() => void>();
+  const notifyPressed = () => {
+    for (const listener of [
+      ...pressedListeners,
     ]) {
       listener();
     }
@@ -244,6 +277,9 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       ...(entry.action !== undefined && {
         action: entry.action,
       }),
+      ...(entry.hold !== undefined && {
+        hold: entry.hold,
+      }),
       ...(label !== undefined && {
         label,
       }),
@@ -280,9 +316,12 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     return target?.closest?.(mode) != null;
   };
 
-  /** Records a key press for sequence matching. Modifier presses and auto-repeat do not count. */
-  const pushHistory = (event: KeyboardEvent) => {
-    if (event.repeat || isModifierEvent(event)) {
+  /**
+   * Records a key press (or a modifier tap) for sequence matching. Modifier key presses, other
+   * than taps, and auto-repeat do not count.
+   */
+  const pushHistory = (event: KeyboardEvent, tap?: string) => {
+    if (event.repeat || (tap === undefined && isModifierEvent(event))) {
       return;
     }
     const now = Date.now();
@@ -293,6 +332,9 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     history.push({
       event,
       time: now,
+      ...(tap !== undefined && {
+        tap,
+      }),
     });
     if (history.length > MAX_HISTORY) {
       history.shift();
@@ -303,19 +345,34 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
   const eventWindow = (
     event: KeyboardEvent,
     type: "keydown" | "keyup",
-  ): KeyboardEvent[] => {
+  ): HistoryItem[] => {
     const last = history[history.length - 1];
-    if (
-      type === "keyup" ||
-      event.repeat ||
-      isModifierEvent(event) ||
-      last?.event !== event
-    ) {
-      return [
-        event,
-      ];
+    if (type === "keydown" && last?.event === event) {
+      return history;
     }
-    return history.map((item) => item.event);
+    return [
+      {
+        event,
+        time: Date.now(),
+      },
+    ];
+  };
+
+  const stepMatches = (
+    entry: Entry,
+    sequence: ParsedSequence,
+    step: ParsedCombo,
+    item: HistoryItem,
+  ): boolean => {
+    const inSequence = sequence.steps.length > 1;
+    if (item.tap !== undefined) {
+      // A tap only satisfies a modifier-only step of a multi-step sequence, e.g. "shift shift".
+      return inSequence && step.modifierOnly && step.key === item.tap;
+    }
+    if (inSequence && step.modifierOnly) {
+      return false;
+    }
+    return matchesEvent(step, item.event, entry.layout, entry.exact);
   };
 
   /** Do the first `length` steps of `sequence` match the last `length` presses? */
@@ -323,7 +380,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     entry: Entry,
     sequence: ParsedSequence,
     length: number,
-    window: KeyboardEvent[],
+    window: HistoryItem[],
   ): boolean => {
     const offset = window.length - length;
     return (
@@ -331,11 +388,11 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       sequence.steps
         .slice(0, length)
         .every((step, index) =>
-          matchesEvent(
+          stepMatches(
+            entry,
+            sequence,
             step,
-            window[offset + index] as KeyboardEvent,
-            entry.layout,
-            entry.exact,
+            window[offset + index] as HistoryItem,
           ),
         )
     );
@@ -343,7 +400,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
 
   /** Is a longer sequence than `length` steps in progress, so the next key could complete it? */
   const hasLongerInProgress = (
-    window: KeyboardEvent[],
+    window: HistoryItem[],
     depths: Map<string, number>,
     length: number,
   ): boolean => {
@@ -417,9 +474,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     if (completedSequence) {
       history = [];
     }
-    if (entries.size === 0) {
-      sync();
-    }
+    sync();
     return handled;
   };
 
@@ -438,6 +493,75 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     clearPending();
     run(waiting.candidates, waiting.event, activeScopeDepths(), false);
   };
+
+  // ---- Long press (hold) --------------------------------------------------------------------
+
+  const clearHolds = () => {
+    for (const hold of holds.values()) {
+      clearTimeout(hold.timer);
+    }
+    holds.clear();
+  };
+
+  /** Cancels the holds that depended on the key that was just released. */
+  const cancelHolds = (event: KeyboardEvent) => {
+    const keyId = keyIdOf(event);
+    const name = normalizeEventKey(event.key ?? "");
+    for (const [entryId, hold] of holds) {
+      if (hold.keyId === keyId || hold.modifiers.includes(name)) {
+        clearTimeout(hold.timer);
+        holds.delete(entryId);
+      }
+    }
+  };
+
+  const startHold = (candidate: Candidate, event: KeyboardEvent) => {
+    const { entry, sequence } = candidate;
+    if (holds.has(entry.id) || entry.hold === undefined) {
+      return;
+    }
+    const step = sequence.steps[0] as ParsedCombo;
+    const modifiers = [
+      ...(step.ctrl
+        ? [
+            "control",
+          ]
+        : []),
+      ...(step.alt
+        ? [
+            "alt",
+          ]
+        : []),
+      ...(step.shift
+        ? [
+            "shift",
+          ]
+        : []),
+      ...(step.meta
+        ? [
+            "meta",
+          ]
+        : []),
+    ];
+    const timer = setTimeout(() => {
+      holds.delete(entry.id);
+      run(
+        [
+          candidate,
+        ],
+        event,
+        activeScopeDepths(),
+        false,
+      );
+    }, entry.hold);
+    holds.set(entry.id, {
+      keyId: keyIdOf(event),
+      modifiers,
+      timer,
+    });
+  };
+
+  // ---- Dispatch -----------------------------------------------------------------------------
 
   const dispatch = (
     event: KeyboardEvent,
@@ -493,6 +617,34 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
         b.entry.id - a.entry.id,
     );
 
+    // Long-press bindings start a timer instead of firing. They are independent of the plain
+    // bindings of the same keys, which fire as usual. `trigger()` skips the wait and fires them.
+    let immediate = candidates;
+    let scheduled = false;
+    if (allowDeferral) {
+      immediate = candidates.filter(
+        (candidate) => candidate.entry.hold === undefined,
+      );
+      if (type === "keydown" && !event.repeat) {
+        for (const candidate of candidates) {
+          if (candidate.entry.hold === undefined) {
+            continue;
+          }
+          applyEventEffects(
+            [
+              candidate,
+            ],
+            event,
+          );
+          startHold(candidate, event);
+          scheduled = true;
+          if (!candidate.entry.passthrough) {
+            break;
+          }
+        }
+      }
+    }
+
     if (
       allowDeferral &&
       type === "keydown" &&
@@ -504,7 +656,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
         // A longer match means the user is completing the sequence we were waiting on; otherwise
         // the shorter binding that was waiting fires now, before this key does anything.
         if (
-          candidates.some(
+          immediate.some(
             (candidate) => candidate.sequence.steps.length > waiting.length,
           )
         ) {
@@ -513,14 +665,14 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
           flushPending();
         }
       }
-      const winner = candidates[0];
+      const winner = immediate[0];
       if (winner !== undefined) {
         const length = winner.sequence.steps.length;
         if (hasLongerInProgress(window, depths, length)) {
           // Like Vim: hold the shorter match back until we know whether a longer one follows.
-          applyEventEffects(candidates, event);
+          applyEventEffects(immediate, event);
           pending = {
-            candidates,
+            candidates: immediate,
             event,
             length,
             timer: setTimeout(flushPending, sequenceTimeout),
@@ -529,18 +681,34 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
         }
       }
     }
-    return run(candidates, event, depths, true);
+    return run(immediate, event, depths, true) || scheduled;
   };
+
+  // ---- Keyboard events ----------------------------------------------------------------------
 
   const onKeyDown = (event: Event) => {
     if (activeRecording !== undefined) {
       return;
     }
     const keyboardEvent = event as KeyboardEvent;
-    pressed.set(
-      keyboardEvent.code || keyboardEvent.key,
-      normalizeEventKey(keyboardEvent.key),
-    );
+    const id = keyIdOf(keyboardEvent);
+    const name = normalizeEventKey(keyboardEvent.key);
+    if (pressed.get(id) !== name) {
+      pressed.set(id, name);
+      notifyPressed();
+    }
+    if (isModifierEvent(keyboardEvent)) {
+      if (!heldModifiers.has(id)) {
+        heldModifiers.set(id, {
+          time: Date.now(),
+          used: false,
+        });
+      }
+    } else {
+      for (const state of heldModifiers.values()) {
+        state.used = true;
+      }
+    }
     pushHistory(keyboardEvent);
     dispatch(keyboardEvent, "keydown");
   };
@@ -550,22 +718,48 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       return;
     }
     const keyboardEvent = event as KeyboardEvent;
-    pressed.delete(keyboardEvent.code || keyboardEvent.key);
+    const id = keyIdOf(keyboardEvent);
+    let pressedChanged = pressed.delete(id);
     // macOS never sends keyup for keys released while Cmd is held, so they would stay "pressed".
     if (normalizeEventKey(keyboardEvent.key) === "meta") {
-      for (const [id, key] of pressed) {
+      for (const [otherId, key] of pressed) {
         if (!MODIFIER_KEYS.has(key)) {
-          pressed.delete(id);
+          pressed.delete(otherId);
+          pressedChanged = true;
         }
+      }
+    }
+    if (pressedChanged) {
+      notifyPressed();
+    }
+    cancelHolds(keyboardEvent);
+
+    if (isModifierEvent(keyboardEvent)) {
+      const state = heldModifiers.get(id);
+      heldModifiers.delete(id);
+      // A modifier pressed and released quickly, with no other key in between, is a "tap".
+      if (
+        state !== undefined &&
+        !state.used &&
+        Date.now() - state.time <= tapTimeout
+      ) {
+        pushHistory(keyboardEvent, normalizeEventKey(keyboardEvent.key));
+        dispatch(keyboardEvent, "keydown");
       }
     }
     dispatch(keyboardEvent, "keyup");
   };
 
   const resetState = () => {
+    const hadPressed = pressed.size > 0;
     pressed.clear();
+    heldModifiers.clear();
     history = [];
     clearPending();
+    clearHolds();
+    if (hadPressed) {
+      notifyPressed();
+    }
   };
   const onVisibilityChange = () => {
     if (
@@ -606,10 +800,12 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     resetState();
   };
 
+  /** Listen to the keyboard while there is a binding or someone watching the pressed keys. */
   function sync() {
-    if (entries.size > 0 && !listening) {
+    const needed = entries.size > 0 || pressedListeners.size > 0;
+    if (needed && !listening) {
       attach();
-    } else if (entries.size === 0 && listening) {
+    } else if (!needed && listening) {
       detach();
     }
   }
@@ -634,6 +830,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     [
       entry.scope,
       entry.on,
+      entry.hold ?? 0,
       entry.priority,
       elementId(entry.element),
       signature,
@@ -698,16 +895,37 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
 
   // ---- Public API ---------------------------------------------------------------------------
 
-  const assertSequencesAllowed = (
+  const assertOptionsAllowed = (
     on: "keydown" | "keyup",
+    hold: number | undefined,
     sequences: ParsedSequence[],
   ) => {
+    const raw = sequences[0]?.raw ?? "";
     const sequence = sequences.find((candidate) => candidate.steps.length > 1);
-    if (on === "keyup" && sequence !== undefined) {
-      throw new HotkeyParseError(
-        sequence.raw,
-        'sequences only work with on: "keydown".',
-      );
+    if (sequence !== undefined) {
+      if (on === "keyup") {
+        throw new HotkeyParseError(
+          sequence.raw,
+          'sequences only work with on: "keydown".',
+        );
+      }
+      if (hold !== undefined) {
+        throw new HotkeyParseError(
+          sequence.raw,
+          "hold only works with single combos, not sequences.",
+        );
+      }
+    }
+    if (hold !== undefined) {
+      if (!(Number.isFinite(hold) && hold > 0)) {
+        throw new HotkeyParseError(
+          raw,
+          "hold must be a number of milliseconds greater than 0.",
+        );
+      }
+      if (on === "keyup") {
+        throw new HotkeyParseError(raw, 'hold only works with on: "keydown".');
+      }
     }
   };
 
@@ -722,7 +940,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       ...stripUndefined(bindOptions),
     };
     const on = merged.on ?? "keydown";
-    assertSequencesAllowed(on, sequences);
+    assertOptionsAllowed(on, merged.hold, sequences);
     const entry: Entry = {
       action,
       description: merged.description,
@@ -731,6 +949,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       exact: merged.exact ?? true,
       group: merged.group,
       handler,
+      hold: merged.hold,
       id: nextEntryId++,
       ignoreInputs: merged.ignoreInputs ?? "auto",
       label: merged.label,
@@ -752,6 +971,11 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
 
     return () => {
       if (entries.delete(entry.id)) {
+        const hold = holds.get(entry.id);
+        if (hold !== undefined) {
+          clearTimeout(hold.timer);
+          holds.delete(entry.id);
+        }
         sync();
         changed();
       }
@@ -783,7 +1007,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
       ...entries.values(),
     ].filter((entry) => entry.action === action);
     for (const entry of affected) {
-      assertSequencesAllowed(entry.on, sequences);
+      assertOptionsAllowed(entry.on, entry.hold, sequences);
     }
     if (keys === null) {
       overrides.delete(action);
@@ -841,9 +1065,14 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     history = [];
     try {
       const events = sequence.steps.map(simulate);
-      for (const event of events) {
-        pushHistory(event);
-      }
+      events.forEach((event, index) => {
+        const step = sequence.steps[index] as ParsedCombo;
+        // In a sequence, a modifier-only step stands for a tap of that modifier.
+        pushHistory(
+          event,
+          sequence.steps.length > 1 && step.modifierOnly ? step.key : undefined,
+        );
+      });
       // Earlier steps only fill the history; just the final step is dispatched, without waiting.
       return dispatch(
         events[events.length - 1] as KeyboardEvent,
@@ -855,14 +1084,54 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
     }
   };
 
-  const isPressed = (key: string): boolean => {
-    const name = normalizeComboKey(key);
+  const keyPressed = (name: string): boolean => {
     for (const [code, pressedKey] of pressed) {
       if (pressedKey === name || codeToName(code) === name) {
         return true;
       }
     }
     return false;
+  };
+
+  const isPressed = (combo: string): boolean => {
+    const parsed = parseCombo(combo, platform);
+    const needed = [
+      ...(parsed.ctrl
+        ? [
+            "control",
+          ]
+        : []),
+      ...(parsed.alt
+        ? [
+            "alt",
+          ]
+        : []),
+      ...(parsed.shift
+        ? [
+            "shift",
+          ]
+        : []),
+      ...(parsed.meta
+        ? [
+            "meta",
+          ]
+        : []),
+      ...(parsed.modifierOnly
+        ? []
+        : [
+            parsed.key,
+          ]),
+    ];
+    return needed.every(keyPressed);
+  };
+
+  const subscribePressed: Hotkeys["subscribePressed"] = (listener) => {
+    pressedListeners.add(listener);
+    sync();
+    return () => {
+      pressedListeners.delete(listener);
+      sync();
+    };
   };
 
   const record: Hotkeys["record"] = (recordOptions = {}) => {
@@ -986,6 +1255,7 @@ export function createHotkeys(options: HotkeysOptions = {}): Hotkeys {
         listeners.delete(listener);
       };
     },
+    subscribePressed,
     trigger,
   };
 }

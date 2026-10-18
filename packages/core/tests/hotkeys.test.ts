@@ -1170,3 +1170,366 @@ describe("keymap", () => {
     expect(hotkeys.getOverrides()).toEqual({});
   });
 });
+
+describe("double tap (modifier taps in sequences)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const shiftDown = () =>
+    press({
+      code: "ShiftLeft",
+      key: "Shift",
+      shiftKey: true,
+    });
+  const shiftUp = () =>
+    press(
+      {
+        code: "ShiftLeft",
+        key: "Shift",
+      },
+      "keyup",
+    );
+  const tapShift = () => {
+    shiftDown();
+    shiftUp();
+  };
+
+  it("fires on a double tap of a modifier", () => {
+    const handler = vi.fn();
+    make().bind("shift shift", handler);
+    tapShift();
+    expect(handler).not.toHaveBeenCalled();
+    tapShift();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[1]).toMatchObject({
+      combo: "shift shift",
+    });
+  });
+
+  it("does not count a modifier used with another key", () => {
+    const handler = vi.fn();
+    make().bind("shift shift", handler);
+    tapShift();
+    shiftDown();
+    key("a", {
+      shiftKey: true,
+    });
+    shiftUp();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not count a modifier held for too long, or taps too far apart", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make({
+      sequenceTimeout: 500,
+      tapTimeout: 200,
+    }).bind("shift shift", handler);
+    shiftDown();
+    vi.advanceTimersByTime(201);
+    shiftUp();
+    tapShift();
+    expect(handler).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(501);
+    tapShift();
+    expect(handler).not.toHaveBeenCalled();
+    tapShift();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("mixes taps and keys in a sequence", () => {
+    const handler = vi.fn();
+    make().bind("shift k", handler);
+    tapShift();
+    key("k");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a plain modifier binding firing on keydown only", () => {
+    const plain = vi.fn();
+    const double = vi.fn();
+    make().bind("shift", plain);
+    hotkeys.bind("shift shift", double);
+    shiftDown();
+    expect(plain).toHaveBeenCalledTimes(1);
+    shiftUp();
+    expect(plain).toHaveBeenCalledTimes(1);
+    tapShift();
+    expect(double).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores taps typed inside inputs, and double tap works with ctrl", () => {
+    const input = document.createElement("input");
+    document.body.append(input);
+    const shift = vi.fn();
+    const control = vi.fn();
+    make().bind("shift shift", shift);
+    hotkeys.bind("ctrl ctrl", control);
+    for (const [code, key, flag] of [
+      [
+        "ShiftLeft",
+        "Shift",
+        "shiftKey",
+      ],
+      [
+        "ShiftLeft",
+        "Shift",
+        "shiftKey",
+      ],
+      [
+        "ControlLeft",
+        "Control",
+        "ctrlKey",
+      ],
+      [
+        "ControlLeft",
+        "Control",
+        "ctrlKey",
+      ],
+    ] as const) {
+      press({
+        code,
+        key,
+        [flag]: true,
+        target: input,
+      });
+      press(
+        {
+          code,
+          key,
+          target: input,
+        },
+        "keyup",
+      );
+    }
+    expect(shift).not.toHaveBeenCalled();
+    expect(control).toHaveBeenCalledTimes(1);
+  });
+
+  it("trigger runs a double tap", () => {
+    const handler = vi.fn();
+    make().bind("shift shift", handler);
+    expect(hotkeys.trigger("shift shift")).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("hold (long press)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires once after the key has been held long enough", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make().bind("k", handler, {
+      hold: 500,
+    });
+    key("k");
+    vi.advanceTimersByTime(499);
+    expect(handler).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    key("k", {
+      repeat: true,
+    });
+    vi.advanceTimersByTime(2000);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("is cancelled when the key is released early", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make().bind("k", handler, {
+      hold: 500,
+    });
+    key("k");
+    vi.advanceTimersByTime(300);
+    key("k", {}, "keyup");
+    vi.advanceTimersByTime(1000);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("is cancelled when a modifier of the combo is released", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make().bind("ctrl+k", handler, {
+      hold: 500,
+    });
+    key("k", {
+      ctrlKey: true,
+    });
+    press(
+      {
+        code: "ControlLeft",
+        key: "Control",
+      },
+      "keyup",
+    );
+    vi.advanceTimersByTime(1000);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("works for modifier-only combos", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make().bind("shift", handler, {
+      hold: 400,
+    });
+    press({
+      code: "ShiftLeft",
+      key: "Shift",
+      shiftKey: true,
+    });
+    vi.advanceTimersByTime(400);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the default action right away and passes the original event", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make().bind("k", handler, {
+      hold: 500,
+    });
+    const event = key("k");
+    expect(event.defaultPrevented).toBe(true);
+    vi.advanceTimersByTime(500);
+    expect(handler.mock.calls[0]?.[0]).toBe(event);
+  });
+
+  it("does not fire if the binding is removed while holding", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    const unbind = make().bind("k", handler, {
+      hold: 500,
+    });
+    key("k");
+    unbind();
+    vi.advanceTimersByTime(1000);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("is independent of a plain binding on the same keys", () => {
+    vi.useFakeTimers();
+    const plain = vi.fn();
+    const long = vi.fn();
+    make().bind("k", plain);
+    hotkeys.bind("k", long, {
+      hold: 500,
+    });
+    expect(hotkeys.getConflicts()).toEqual([]);
+    key("k");
+    expect(plain).toHaveBeenCalledTimes(1);
+    expect(long).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    expect(long).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports once and is listed in getBindings", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    make().bind("k", handler, {
+      hold: 100,
+      once: true,
+    });
+    expect(hotkeys.getBindings()[0]).toMatchObject({
+      hold: 100,
+    });
+    key("k");
+    vi.advanceTimersByTime(100);
+    key("k", {}, "keyup");
+    key("k");
+    vi.advanceTimersByTime(100);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("trigger fires it without waiting", () => {
+    const handler = vi.fn();
+    make().bind("k", handler, {
+      hold: 500,
+    });
+    expect(hotkeys.trigger("k")).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid combinations", () => {
+    make();
+    expect(() =>
+      hotkeys.bind("g i", () => {}, {
+        hold: 500,
+      }),
+    ).toThrow(/single combos/);
+    expect(() =>
+      hotkeys.bind("k", () => {}, {
+        hold: 500,
+        on: "keyup",
+      }),
+    ).toThrow(/keydown/);
+    expect(() =>
+      hotkeys.bind("k", () => {}, {
+        hold: 0,
+      }),
+    ).toThrow(/greater than 0/);
+  });
+});
+
+describe("pressed keys", () => {
+  it("notifies subscribers and keeps the engine listening even with no bindings", () => {
+    make();
+    const listener = vi.fn();
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const stop = hotkeys.subscribePressed(listener);
+    expect(add).toHaveBeenCalledWith("keydown", expect.any(Function), false);
+    key("k");
+    expect(listener).toHaveBeenCalledTimes(1);
+    key("k", {
+      repeat: true,
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    key("k", {}, "keyup");
+    expect(listener).toHaveBeenCalledTimes(2);
+    stop();
+    expect(remove).toHaveBeenCalledWith("keydown", expect.any(Function), false);
+    key("k");
+    expect(listener).toHaveBeenCalledTimes(2);
+    add.mockRestore();
+    remove.mockRestore();
+  });
+
+  it("notifies when the pressed keys are reset on blur", () => {
+    make();
+    const listener = vi.fn();
+    hotkeys.subscribePressed(listener);
+    key("k");
+    window.dispatchEvent(new Event("blur"));
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(hotkeys.isPressed("k")).toBe(false);
+  });
+
+  it("isPressed accepts combos", () => {
+    make().subscribePressed(() => {});
+    press({
+      code: "ControlLeft",
+      ctrlKey: true,
+      key: "Control",
+    });
+    press({
+      code: "ShiftLeft",
+      ctrlKey: true,
+      key: "Shift",
+      shiftKey: true,
+    });
+    expect(hotkeys.isPressed("ctrl")).toBe(true);
+    expect(hotkeys.isPressed("mod")).toBe(true);
+    expect(hotkeys.isPressed("ctrl+shift")).toBe(true);
+    expect(hotkeys.isPressed("ctrl+shift+k")).toBe(false);
+    key("k", {
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(hotkeys.isPressed("ctrl+shift+k")).toBe(true);
+    expect(hotkeys.isPressed("alt")).toBe(false);
+  });
+});

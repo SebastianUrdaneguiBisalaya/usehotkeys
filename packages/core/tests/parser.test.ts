@@ -106,7 +106,10 @@ describe("parseSequence", () => {
   it("rejects invalid steps and modifier-only steps in a sequence", async () => {
     const { parseSequence } = await import("../src/parser.js");
     expect(() => parseSequence("g ctrl+", "other")).toThrow(HotkeyParseError);
-    expect(() => parseSequence("g shift", "other")).toThrow(/modifiers/);
+    expect(() => parseSequence("g ctrl+shift", "other")).toThrow(
+      /single modifier/,
+    );
+    expect(parseSequence("shift shift", "other").steps).toHaveLength(2);
     expect(parseSequence("shift", "other").steps).toHaveLength(1);
   });
 

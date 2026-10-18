@@ -14,6 +14,8 @@ First release.
 - Combos with exact modifiers, `mod` per platform, aliases, `ctrl++`, modifier-only combos and arrays of combos.
 - Logical and physical keyboard layouts; handling of symbols, numpad, macOS Option, non-Latin layouts and AltGr.
 - Sequences (`"g i"`, `"mod+k mod+s"`) with `sequenceTimeout` and Vim-style waiting when a binding is a prefix of a longer sequence.
+- Double tap through sequences (`"k k"`, `"shift shift"` with `tapTimeout`) and long press through the `hold` option.
+- `isPressed` accepts combos, and `subscribePressed` reports pressed-key changes.
 - Scopes (`pushScope`, `inherit: false` for modals, `"*"` for always-on bindings).
 - Priorities, `passthrough`, conflict detection (`onConflict`, `getConflicts`, `debug`).
 - `ignoreInputs` (`"auto"`, boolean, selector or function) with Shadow DOM support and IME handling.

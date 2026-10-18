@@ -67,6 +67,11 @@ export type HotkeyOptions = {
    * With `passthrough: true` the binding fires and lower-ranked matches still run afterwards.
    */
   passthrough?: boolean | undefined;
+  /**
+   * Fire only after the combo has been held down for this many milliseconds (a long press).
+   * Releasing earlier cancels it. Works with single combos and `on: "keydown"`, not with sequences.
+   */
+  hold?: number | undefined;
   /** Human-readable name, shown by {@link Hotkeys.getBindings}. */
   label?: string | undefined;
   /** Longer description, shown by {@link Hotkeys.getBindings}. */
@@ -97,6 +102,8 @@ export type BindingInfo = {
   id: number;
   /** The action id when the binding was created with `bindAction`. */
   action?: string;
+  /** The long-press time in milliseconds when the binding uses `hold`. */
+  hold?: number;
   /** Combos exactly as written in `bind` (or as currently assigned to the action). */
   combos: string[];
   scope: string;
@@ -169,6 +176,11 @@ export type HotkeysOptions = {
   capture?: boolean | undefined;
   /** Milliseconds allowed between the steps of a sequence such as `"g i"`. Defaults to `1000`. */
   sequenceTimeout?: number | undefined;
+  /**
+   * Longest time in milliseconds a modifier can be held and still count as a tap in sequences
+   * such as `"shift shift"` (double tap). Defaults to `300`.
+   */
+  tapTimeout?: number | undefined;
   /** Named actions with default shortcuts, for `bindAction`. Lets users customise shortcuts. */
   keymap?: Keymap | undefined;
   /** The user's saved customisations, `{ action: keys }`, applied on top of the keymap. */
@@ -265,8 +277,13 @@ export type Hotkeys = {
   getBindings: () => readonly BindingInfo[];
   /** Groups of bindings that compete for the same keys. */
   getConflicts: () => HotkeyConflict[];
-  /** `true` while the key (`"shift"`, `"a"`, `"escape"`…) is held down. */
-  isPressed: (key: string) => boolean;
+  /** `true` while every key of the combo (`"shift"`, `"a"`, `"ctrl+shift"`, `"mod+k"`…) is held down. */
+  isPressed: (combo: string) => boolean;
+  /**
+   * Calls `listener` whenever a key is pressed or released (or the pressed keys are reset).
+   * Keeps the engine listening to the keyboard while subscribed, even with no bindings.
+   */
+  subscribePressed: (listener: () => void) => Unbind;
   /**
    * Listens for the next key combination the user presses and resolves with it as a string you can
    * pass to `bind` (e.g. `"mod+shift+k"`), or `null` if it is cancelled. While recording, no
