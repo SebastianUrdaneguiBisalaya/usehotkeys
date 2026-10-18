@@ -75,7 +75,7 @@ export function parseCombo(raw: string, platform: Platform): ParsedCombo {
   if (/\s/.test(combo)) {
     throw new HotkeyParseError(
       raw,
-      'spaces are not allowed. Write the space key as "space"; key sequences are not supported yet.',
+      'spaces are not allowed inside a single step. Write the space key as "space".',
     );
   }
 
@@ -137,5 +137,49 @@ export function parseCombo(raw: string, platform: Platform): ParsedCombo {
     raw,
     shift: modifiers.has("shift"),
     signature: parts.join("+"),
+  };
+}
+
+/** A hotkey made of one or more steps, e.g. `"g i"` is two steps. A plain combo has one step. */
+export type ParsedSequence = {
+  /** The hotkey exactly as the caller wrote it. */
+  raw: string;
+  steps: ParsedCombo[];
+  /** Stable identity, e.g. `"ctrl+k ctrl+s"`. */
+  signature: string;
+};
+
+/**
+ * Parses a hotkey that may be a sequence: steps separated by spaces, e.g. `"g i"` or
+ * `"mod+k mod+s"`. A hotkey without spaces is a sequence with one step.
+ *
+ * @throws {HotkeyParseError} when a step is invalid or a multi-step sequence has a step with several modifiers and no key.
+ */
+export function parseSequence(raw: string, platform: Platform): ParsedSequence {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    throw new HotkeyParseError(raw, "the combo is empty.");
+  }
+  const steps = trimmed.split(/\s+/).map((step) => parseCombo(step, platform));
+  const modifierCount = (step: ParsedCombo) =>
+    [
+      step.ctrl,
+      step.alt,
+      step.shift,
+      step.meta,
+    ].filter(Boolean).length;
+  if (
+    steps.length > 1 &&
+    steps.some((step) => step.modifierOnly && modifierCount(step) > 1)
+  ) {
+    throw new HotkeyParseError(
+      raw,
+      'a step that is only modifiers must be a single modifier (a tap), like "shift shift".',
+    );
+  }
+  return {
+    raw,
+    signature: steps.map((step) => step.signature).join(" "),
+    steps,
   };
 }

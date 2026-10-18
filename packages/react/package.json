@@ -2,6 +2,15 @@
   "name": "@usehotkeys/react",
   "version": "0.1.0",
   "description": "React hooks for @usehotkeys/core: declarative keyboard shortcuts with scopes, priorities and conflict resolution.",
+  "homepage": "https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/tree/main/packages/react#readme",
+  "bugs": {
+    "url": "https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SebastianUrdaneguiBisalaya/usehotkeys.git",
+    "directory": "packages/react"
+  },
   "keywords": [
     "react",
     "hooks",
@@ -12,8 +21,11 @@
     "typescript"
   ],
   "license": "ISC",
-  "author": "",
-  "private": true,
+  "author": {
+    "name": "Sebastian Marat Urdanegui Bisalaya",
+    "url": "https://www.sebastianurdanegui.com/"
+  },
+  "private": false,
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",

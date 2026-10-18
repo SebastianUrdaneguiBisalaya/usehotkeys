@@ -1,8 +1,18 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { createHotkeys } from "@usehotkeys/core";
-import { StrictMode, useRef, useState } from "react";
+import { type ReactNode, StrictMode, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HotkeysProvider, useHotkeyScope, useHotkeys } from "../src/index.js";
+import {
+  HotkeysProvider,
+  useBindings,
+  useHotkeyAction,
+  useHotkeyScope,
+  useHotkeys,
+  useHotkeysInstance,
+  useIsPressed,
+  useRecordHotkey,
+  useShortcuts,
+} from "../src/index.js";
 
 afterEach(cleanup);
 
@@ -178,5 +188,318 @@ describe("HotkeysProvider", () => {
     expect(custom.getBindings()).toHaveLength(1);
     press("k");
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sequences", () => {
+  it("accepts sequence strings", () => {
+    const handler = vi.fn();
+    const Component = () => {
+      useHotkeys("g i", handler);
+      return null;
+    };
+    render(<Component />);
+    press("g");
+    press("i");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useRecordHotkey", () => {
+  const Recorder = () => {
+    const { combo, isRecording, preview, start } = useRecordHotkey();
+    return (
+      <button
+        onClick={() => void start()}
+        type="button"
+      >
+        {isRecording ? `recording:${preview}` : `combo:${combo ?? "none"}`}
+      </button>
+    );
+  };
+
+  it("records a combo and exposes progress", async () => {
+    const { getByRole } = render(<Recorder />);
+    const button = getByRole("button");
+    expect(button.textContent).toBe("combo:none");
+    act(() => button.click());
+    expect(button.textContent).toBe("recording:");
+    press("Control", {
+      code: "ControlLeft",
+      ctrlKey: true,
+    });
+    expect(button.textContent).toBe("recording:mod");
+    await act(async () => {
+      press("k", {
+        ctrlKey: true,
+      });
+    });
+    expect(button.textContent).toBe("combo:mod+k");
+  });
+
+  it("keeps the previous combo when cancelled and stops on unmount", async () => {
+    const { getByRole, unmount } = render(<Recorder />);
+    const button = getByRole("button");
+    act(() => button.click());
+    await act(async () => {
+      press("Escape", {
+        code: "Escape",
+      });
+    });
+    expect(button.textContent).toBe("combo:none");
+    act(() => button.click());
+    unmount();
+    const handler = vi.fn();
+    const probe = createHotkeys({
+      target: document,
+    });
+    probe.bind("k", handler);
+    press("k");
+    expect(handler).toHaveBeenCalledTimes(1);
+    probe.destroy();
+  });
+});
+
+describe("useBindings", () => {
+  const isolated = (children: ReactNode, options = {}) => (
+    <HotkeysProvider
+      options={{
+        platform: "other",
+        ...options,
+      }}
+    >
+      {children}
+    </HotkeysProvider>
+  );
+
+  it("lists registered shortcuts and updates as components mount and unmount", () => {
+    const List = () => {
+      const bindings = useBindings({
+        labeledOnly: true,
+      });
+      return (
+        <ul data-testid="list">
+          {bindings.map((binding) => (
+            <li key={binding.id}>{binding.label}</li>
+          ))}
+        </ul>
+      );
+    };
+    const Feature = () => {
+      useHotkeys("mod+k", () => {}, {
+        label: "Open palette",
+      });
+      useHotkeys("x", () => {});
+      return null;
+    };
+    const App = ({ show }: { show: boolean }) =>
+      isolated(
+        <>
+          <List />
+          {show ? <Feature /> : null}
+        </>,
+      );
+    const { getByTestId, rerender } = render(<App show={false} />);
+    expect(getByTestId("list").textContent).toBe("");
+    rerender(<App show />);
+    expect(getByTestId("list").textContent).toBe("Open palette");
+    rerender(<App show={false} />);
+    expect(getByTestId("list").textContent).toBe("");
+  });
+
+  it("filters by activeOnly and group, and reacts to scopes and enabled", () => {
+    const List = () => {
+      const active = useBindings({
+        activeOnly: true,
+        group: "Editor",
+      });
+      return (
+        <p data-testid="active">
+          {active.map((binding) => binding.label).join(",")}
+        </p>
+      );
+    };
+    const Feature = ({ enabled }: { enabled: boolean }) => {
+      useHotkeys("b", () => {}, {
+        enabled,
+        group: "Editor",
+        label: "Bold",
+        scope: "editor",
+      });
+      useHotkeys("i", () => {}, {
+        group: "Other",
+        label: "Italic",
+      });
+      return null;
+    };
+    const Scope = ({ on }: { on: boolean }) => {
+      useHotkeyScope("editor", {
+        enabled: on,
+      });
+      return null;
+    };
+    const App = ({ enabled, scope }: { enabled: boolean; scope: boolean }) =>
+      isolated(
+        <>
+          <List />
+          <Feature enabled={enabled} />
+          <Scope on={scope} />
+        </>,
+      );
+    const { getByTestId, rerender } = render(
+      <App
+        enabled
+        scope={false}
+      />,
+    );
+    expect(getByTestId("active").textContent).toBe("");
+    rerender(
+      <App
+        enabled
+        scope
+      />,
+    );
+    expect(getByTestId("active").textContent).toBe("Bold");
+    rerender(
+      <App
+        enabled={false}
+        scope
+      />,
+    );
+    expect(getByTestId("active").textContent).toBe("");
+  });
+});
+
+describe("keymap hooks", () => {
+  const keymap = {
+    open: {
+      group: "Nav",
+      keys: "mod+k",
+      label: "Open",
+    },
+  };
+
+  it("useHotkeyAction follows setShortcut and useShortcuts reflects it", () => {
+    const handler = vi.fn();
+    let instance: ReturnType<typeof useHotkeysInstance> | undefined;
+    const Probe = () => {
+      instance = useHotkeysInstance();
+      useHotkeyAction("open", handler);
+      const shortcuts = useShortcuts();
+      return (
+        <p data-testid="keys">
+          {shortcuts.map((shortcut) => shortcut.keys.join("|")).join(",")}
+        </p>
+      );
+    };
+    const { getByTestId } = render(
+      <HotkeysProvider
+        options={{
+          keymap,
+          platform: "other",
+        }}
+      >
+        <Probe />
+      </HotkeysProvider>,
+    );
+    expect(getByTestId("keys").textContent).toBe("mod+k");
+    press("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    act(() => instance?.setShortcut("open", "mod+p"));
+    expect(getByTestId("keys").textContent).toBe("mod+p");
+    press("k", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    press("p", {
+      ctrlKey: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useIsPressed", () => {
+  const Probe = ({ combo }: { combo: string }) => (
+    <p data-testid="state">{String(useIsPressed(combo))}</p>
+  );
+
+  it("follows the keys being held, with no bindings registered", () => {
+    const { getByTestId } = render(
+      <HotkeysProvider
+        options={{
+          platform: "other",
+        }}
+      >
+        <Probe combo="shift" />
+      </HotkeysProvider>,
+    );
+    expect(getByTestId("state").textContent).toBe("false");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          code: "ShiftLeft",
+          key: "Shift",
+          shiftKey: true,
+        }),
+      );
+    });
+    expect(getByTestId("state").textContent).toBe("true");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          bubbles: true,
+          code: "ShiftLeft",
+          key: "Shift",
+        }),
+      );
+    });
+    expect(getByTestId("state").textContent).toBe("false");
+  });
+
+  it("supports combos and stops listening on unmount", () => {
+    const engine = createHotkeys({
+      platform: "other",
+    });
+    const { getByTestId, unmount } = render(
+      <HotkeysProvider hotkeys={engine}>
+        <Probe combo="mod+k" />
+      </HotkeysProvider>,
+    );
+    press("Control", {
+      code: "ControlLeft",
+      ctrlKey: true,
+    });
+    expect(getByTestId("state").textContent).toBe("false");
+    press("k", {
+      ctrlKey: true,
+    });
+    expect(getByTestId("state").textContent).toBe("true");
+    const remove = vi.spyOn(document, "removeEventListener");
+    unmount();
+    expect(remove).toHaveBeenCalledWith("keydown", expect.any(Function), false);
+    remove.mockRestore();
+  });
+});
+
+describe("hold and double tap through the hook", () => {
+  it("passes hold to the engine", () => {
+    vi.useFakeTimers();
+    const handler = vi.fn();
+    const Component = () => {
+      useHotkeys("k", handler, {
+        hold: 300,
+      });
+      return null;
+    };
+    render(<Component />);
+    press("k");
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

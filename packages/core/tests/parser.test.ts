@@ -81,3 +81,44 @@ describe("formatHotkey", () => {
     ).toBe("↑");
   });
 });
+
+describe("parseSequence", () => {
+  it("parses a plain combo as one step", async () => {
+    const { parseSequence } = await import("../src/parser.js");
+    expect(parseSequence("mod+k", "other")).toMatchObject({
+      signature: "ctrl+k",
+      steps: [
+        {
+          key: "k",
+        },
+      ],
+    });
+  });
+
+  it("parses steps separated by spaces", async () => {
+    const { parseSequence } = await import("../src/parser.js");
+    const sequence = parseSequence("  g   i ", "other");
+    expect(sequence.steps).toHaveLength(2);
+    expect(sequence.signature).toBe("g i");
+    expect(parseSequence("mod+k mod+s", "mac").signature).toBe("meta+k meta+s");
+  });
+
+  it("rejects invalid steps and modifier-only steps in a sequence", async () => {
+    const { parseSequence } = await import("../src/parser.js");
+    expect(() => parseSequence("g ctrl+", "other")).toThrow(HotkeyParseError);
+    expect(() => parseSequence("g ctrl+shift", "other")).toThrow(
+      /single modifier/,
+    );
+    expect(parseSequence("shift shift", "other").steps).toHaveLength(2);
+    expect(parseSequence("shift", "other").steps).toHaveLength(1);
+  });
+
+  it("formats sequences step by step", () => {
+    expect(formatHotkey("g i")).toBe("G I");
+    expect(
+      formatHotkey("mod+k mod+s", {
+        platform: "other",
+      }),
+    ).toBe("Ctrl+K Ctrl+S");
+  });
+});

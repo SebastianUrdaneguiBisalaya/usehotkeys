@@ -25,3 +25,17 @@ export class HotkeysEnvironmentError extends HotkeysError {
     this.name = "HotkeysEnvironmentError";
   }
 }
+
+/** Thrown when an action id is not in the keymap, e.g. `bindAction("sav")` when only `save` exists. */
+export class UnknownActionError extends HotkeysError {
+  /** The action id that was not found. */
+  readonly action: string;
+
+  constructor(action: string) {
+    super(
+      `Unknown action "${action}". Add it to the "keymap" option of createHotkeys().`,
+    );
+    this.name = "UnknownActionError";
+    this.action = action;
+  }
+}

@@ -2,10 +2,10 @@ import { codeToName, normalizeEventKey, SYMBOL_CODES } from "./keys.js";
 import type { ParsedCombo } from "./parser.js";
 import type { KeyLayout } from "./types.js";
 
-const isAlphanumeric = (value: string) => /^[a-z0-9]$/.test(value);
+export const isAlphanumeric = (value: string) => /^[a-z0-9]$/.test(value);
 
 /** A single printable character that is not a letter or digit, such as `?` or `+`. */
-const isSymbol = (value: string) =>
+export const isSymbol = (value: string) =>
   value.length === 1 && !isAlphanumeric(value);
 
 function matchesKey(

@@ -2,6 +2,15 @@
   "name": "@usehotkeys/core",
   "version": "0.1.0",
   "description": "Framework-agnostic keyboard shortcut engine: combos, priorities, scopes and conflict resolution.",
+  "homepage": "https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SebastianUrdaneguiBisalaya/usehotkeys.git",
+    "directory": "packages/core"
+  },
   "keywords": [
     "hotkeys",
     "keyboard",
@@ -11,7 +20,10 @@
     "typescript"
   ],
   "license": "ISC",
-  "author": "",
+  "author": {
+    "name": "Sebastian Marat Urdanegui Bisalaya",
+    "url": "https://www.sebastianurdanegui.com/"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
@@ -61,5 +73,5 @@
     "typescript": "5.7.3",
     "vitest": "4.1.11"
   },
-  "private": true
+  "private": false
 }

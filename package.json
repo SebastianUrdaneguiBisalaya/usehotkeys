@@ -4,6 +4,10 @@
   "description": "Framework-agnostic keyboard shortcut engine (core) with React bindings. pnpm workspace root.",
   "license": "ISC",
   "private": true,
+  "author": {
+    "name": "Sebastian Marat Urdanegui Bisalaya",
+    "url": "https://www.sebastianurdanegui.com/"
+  },
   "scripts": {
     "build": "pnpm --filter \"./packages/*\" run build",
     "dev": "pnpm --filter \"./packages/*\" run --parallel dev",
