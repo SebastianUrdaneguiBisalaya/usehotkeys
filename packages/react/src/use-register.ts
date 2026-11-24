@@ -1,10 +1,13 @@
 import type { HotkeyHandler, HotkeyOptions, Hotkeys } from "@usehotkeys/core";
-import { type RefObject, useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { useHotkeysInstance } from "./context.js";
 
 /** Options for the binding hooks: the core options, where `element` may also be a React ref. */
 export type BindingHookOptions = Omit<HotkeyOptions, "element"> & {
-  /** Only fire inside this element. Pass a ref to target a rendered element. */
+  /**
+   * Only fire inside this element. Pass a ref to target a rendered element: the binding registers
+   * once `ref.current` is set (even on a later render) and unregisters while it is `null`.
+   */
   element?: Element | RefObject<Element | null> | null | undefined;
 };
 
@@ -66,6 +69,14 @@ export function useRegister(
   const enabledDep =
     typeof options.enabled === "function" ? "function" : options.enabled;
 
+  // A ref's `current` is only set at commit, and the ref object itself never changes, so it cannot
+  // be an effect dependency. Mirror it into state after every commit: when the element appears,
+  // disappears or is swapped, the state changes and the binding below re-registers.
+  const [refElement, setRefElement] = useState<Element | null>(null);
+  useEffect(() => {
+    setRefElement(isRef(element) ? element.current : null);
+  });
+
   // `enabled` is read through the ref, so the engine cannot see it change. Tell subscribers
   // (e.g. a shortcuts help dialog) to refresh when a plain boolean flips.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `enabledDep` is the trigger; the value is not used inside.
@@ -76,7 +87,7 @@ export function useRegister(
     enabledDep,
   ]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `latest` is a ref; the listed options are the ones that must re-register.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `latest` is a ref; the listed options are the ones that must re-register, and `refElement` tracks a ref's `current`.
   useEffect(() => {
     const resolved = isRef(element) ? element.current : element;
     if (isRef(element) && resolved === null) {
@@ -120,6 +131,7 @@ export function useRegister(
     targetKey,
     description,
     element,
+    refElement,
     exact,
     group,
     hold,

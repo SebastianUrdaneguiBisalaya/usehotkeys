@@ -137,6 +137,37 @@ describe("useHotkeys", () => {
     press("k", {}, getByTestId("panel"));
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it("registers once a ref's element appears on a later render, and unregisters when it goes", () => {
+    const handler = vi.fn();
+    const Panel = ({ open }: { open: boolean }) => {
+      const ref = useRef<HTMLDivElement>(null);
+      useHotkeys("k", handler, {
+        element: ref,
+      });
+      return open ? (
+        <div
+          data-testid="panel"
+          ref={ref}
+        />
+      ) : null;
+    };
+    const { getByTestId, rerender } = render(<Panel open={false} />);
+    press("k");
+    expect(handler).not.toHaveBeenCalled();
+
+    rerender(<Panel open />);
+    const panel = getByTestId("panel");
+    press("k", {}, panel);
+    expect(handler).toHaveBeenCalledTimes(1);
+    press("k");
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    rerender(<Panel open={false} />);
+    press("k", {}, panel);
+    press("k");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("useHotkeyScope", () => {
