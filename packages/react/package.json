@@ -1,6 +1,6 @@
 {
   "name": "@usehotkeys/react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React hooks for @usehotkeys/core: declarative keyboard shortcuts with scopes, priorities and conflict resolution.",
   "homepage": "https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/tree/main/packages/react#readme",
   "bugs": {
