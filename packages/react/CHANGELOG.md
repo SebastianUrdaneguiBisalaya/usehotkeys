@@ -4,6 +4,12 @@ All notable changes to `@usehotkeys/react` are documented here. The format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-11-24
+
+### Fixed
+
+- A binding whose `element` is a ref now registers when the ref's element appears on a later render (for example when the component first returned `null`) and unregisters when it goes away. Previously it never registered if `ref.current` was `null` on mount.
+
 ## [0.1.0] - 2026-10-17
 
 First release. Requires `@usehotkeys/core` 0.1.0 and React 18 or later.
@@ -18,4 +24,5 @@ First release. Requires `@usehotkeys/core` 0.1.0 and React 18 or later.
 - Latest-handler semantics: no stale closures, no re-registration on re-render.
 - `"use client"` directive for the Next.js App Router; StrictMode and SSR safe.
 
+[0.1.1]: https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/releases/tag/v0.1.0
