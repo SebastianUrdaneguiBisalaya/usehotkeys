@@ -68,6 +68,8 @@ Things worth knowing:
   }
   ```
 
+  The shortcut is active only while `ref.current` is set: if the element renders later (the component first returned `null`, or it is behind a condition), it registers when the element appears and unregisters when it goes away.
+
 - **Conflicts between components are resolved for you.** If two mounted components bind `escape`, the highest `priority` wins, then the most recently mounted. See [Priorities and conflicts](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#priorities-and-conflicts).
 - **Typing in inputs is handled.** Plain keys do not fire while the user types; `mod+s` does. Change it with `ignoreInputs`. See [Typing in inputs](https://github.com/SebastianUrdaneguiBisalaya/usehotkeys/blob/main/packages/core/README.md#typing-in-inputs).
 
